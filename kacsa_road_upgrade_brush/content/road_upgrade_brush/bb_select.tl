@@ -1,0 +1,310 @@
+-- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
+-- Bulk Bulldozer selection rules (PLAN "Architecture": bb_select.tl). PURE: takes the plain
+-- descriptors bb_gather copies out of the engine, so every rule is unit-tested offline
+-- (tests/square_bulk_bulldozer/test_select.lua). No api.* calls here.
+--
+-- Order: hard rules (PLAN "Never removed") always win over the toolbar filters.
+
+local sel : BulkBulldozerSelect = {}
+
+-- One command per segment, so the selection stops growing past the 50 commands of one press.
+sel.STROKE_CAP = 50
+-- PLAN "What a stroke hits": a construction is hit when its origin (transf translation) is in
+-- the circle. false = take every construction the octree returns for the circle (only right if
+-- the octree tests bounding volumes; settle with TESTING §2).
+sel.CONSTRUCTION_ORIGIN_ONLY = true
+
+sel.KINDS = { "road", "track", "station", "asset", "town_building", "industry", "other" }
+sel.REASONS = { "filtered", "underground", "surface", "tram_only", "industry", "hq", "part", "foreign", "not_player", "gone" }
+
+-- Toolbar order of the filter CheckBoxes (BulkBulldozerFilters field names).
+sel.FILTER_KEYS = { "roads", "tracks", "stations", "assets", "townBuildings", "underground" }
+
+local KIND_LABEL : {string : string} = {
+	road = "roads",
+	track = "tracks",
+	station = "stations/depots",
+	asset = "assets",
+	town_building = "town buildings",
+	industry = "industry",
+	other = "other",
+}
+
+local REASON_LABEL : {string : string} = {
+	filtered = "filtered",
+	underground = "underground",
+	surface = "on the ground",
+	tram_only = "tram track",
+	industry = "industry",
+	hq = "HQ",
+	part = "part of a construction",
+	foreign = "other player",
+	not_player = "not yours",
+	gone = "gone",
+}
+
+-- PLAN "Filters" defaults.
+function sel.defaultFilters() : BulkBulldozerFilters
+	return {
+		roads = true,
+		tracks = false,
+		stations = false,
+		assets = false,
+		townBuildings = false,
+		underground = false,
+		surface = true,
+	}
+end
+
+function sel.checkboxOn(v : number, dflt : boolean) : boolean
+	if v == 2 then return true end
+	if v == 1 then return false end
+	return dflt
+end
+
+-- Toolbar sync (coordinator request 2026-10-07): the CheckBoxes shown and the filters used must
+-- never disagree. One menu value → true (2 = ticked), false (1 = unticked), nil (unknown).
+function sel.paramValue(v : number) : boolean
+	if v == 2 then return true end
+	if v == 1 then return false end
+	return nil
+end
+
+-- The filter values a toolbar params map certainly shows (keys: field → param key). Fields whose
+-- value is missing or not 1/2 are left out (unknown).
+function sel.paramFilters(params : {string : number}, keys : {string : string}) : {string : boolean}
+	local out : {string : boolean} = {}
+	if params == nil then return out end
+	for field, key in pairs(keys) do
+		local v = sel.paramValue(params[key])
+		if v ~= nil then out[field] = v end
+	end
+	return out
+end
+
+-- The filters to use. Per field: the value the toolbar last showed (`shown`); else, when no
+-- toggle of that field was seen in any menu category (`toggles[category][field]`), the default
+-- (the menu shows defaults until toggled); else the default only if every seen toggle agrees
+-- with it. Anything else is unknown and treated as OFF (fail safe), listed in the 2nd result.
+function sel.resolveFilters(shown : {string : boolean}, toggles : {string : {string : boolean}},
+		defaults : BulkBulldozerFilters) : BulkBulldozerFilters, {string}
+	local out = {} as {string : boolean}
+	local unknown : {string} = {}
+	local dflt = defaults as {string : boolean}
+	for _, field in ipairs(sel.FILTER_KEYS) do
+		local v : boolean = nil
+		if shown ~= nil then v = shown[field] end   -- (not `and/or`: false must survive)
+		if v == nil then
+			local d = dflt[field] == true
+			local agree = true
+			for _, cat in pairs(toggles or {}) do
+				local t = cat[field]
+				if t ~= nil and t ~= d then agree = false end
+			end
+			if agree then
+				v = d
+			else
+				v = false
+				unknown[#unknown + 1] = field
+			end
+		end
+		out[field] = v
+	end
+	return out as BulkBulldozerFilters, unknown
+end
+
+local function filterAllows(kind : BulkBulldozerKind, f : BulkBulldozerFilters) : boolean
+	if kind == "road" then return f.roads == true
+	elseif kind == "track" then return f.tracks == true
+	elseif kind == "station" then return f.stations == true
+	elseif kind == "asset" then return f.assets == true
+	elseif kind == "town_building" then return f.townBuildings == true
+	end
+	return false
+end
+
+local function isOwned(owner : integer) : boolean
+	return owner ~= nil and owner >= 0
+end
+
+-- User decision 2026-10-07 (PLAN "Filters"): one "Roads" kind for every street, owned or not.
+-- Town roads and unowned player roads can't be told apart, and streets freed from a street
+-- construction (e.g. a roundabout) have no PLAYER_OWNED (research §12). The hard rules in
+-- sel.classify still keep out other players' streets, construction parts and industry roads.
+local function edgeKind(d : BulkBulldozerDesc) : BulkBulldozerKind
+	if d.isStreet then return "road" end
+	return isOwned(d.owner) and "track" or "other"
+end
+
+local function constructionKind(d : BulkBulldozerDesc) : BulkBulldozerKind
+	if (d.industries or 0) > 0 then return "industry" end
+	if not isOwned(d.owner) then
+		-- Same test as overpass_probe.script.tl:334-349 (townBuildingConstruction).
+		if (d.townBuildings or 0) > 0 and (d.stations or 0) == 0 and (d.depots or 0) == 0
+				and (d.frozen or 0) == 0 then
+			return "town_building"
+		end
+		return "other"
+	end
+	if (d.stations or 0) > 0 or (d.depots or 0) > 0 then return "station" end
+	return "asset"
+end
+
+function sel.classify(d : BulkBulldozerDesc, f : BulkBulldozerFilters, ctx : BulkBulldozerContext) : BulkBulldozerCandidate
+	local kind : BulkBulldozerKind = d.isEdge and edgeKind(d) or constructionKind(d)
+	local nObjects = d.isEdge and d.objects ~= nil and #d.objects or 0
+	local function skip(reason : BulkBulldozerReason) : BulkBulldozerCandidate
+		return { entity = d.entity, kind = kind, reason = reason, objects = nObjects }
+	end
+	local player = ctx ~= nil and ctx.player or -1
+	-- Hard rules (PLAN "Never removed"), most specific first.
+	if d.gone then return skip("gone") end
+	if isOwned(d.owner) and d.owner ~= player then return skip("foreign") end
+	if d.parentConstruction ~= nil and d.parentConstruction >= 0 then return skip("part") end
+	if kind == "industry" or (d.isEdge and d.industryRoad) then return skip("industry") end
+	if not d.isEdge and ctx ~= nil and ctx.hq ~= nil and ctx.hq >= 0 and d.entity == ctx.hq then
+		return skip("hq")
+	end
+	if kind == "other" then return skip("not_player") end
+	-- A stand-alone tram track is not a road: the brush never takes it.
+	if d.isEdge and d.isStreet and d.tramOnly then return skip("tram_only") end
+	-- Toolbar filters.
+	if not filterAllows(kind, f) then return skip("filtered") end
+	if d.isEdge and d.isTunnel and not f.underground then return skip("underground") end
+	-- With the underground view on, only tunnels may be selected (surface is false, not nil, then).
+	if d.isEdge and not d.isTunnel and f.surface == false then return skip("surface") end
+	return { entity = d.entity, kind = kind, reason = nil, objects = nObjects }
+end
+
+function sel.newStroke() : BulkBulldozerStroke
+	return {
+		keep = {},
+		order = {},
+		skipped = {},
+		kindCounts = {},
+		reasonCounts = {},
+		objects = 0,
+		capped = false,
+	}
+end
+
+function sel.count(s : BulkBulldozerStroke) : integer
+	return #s.order
+end
+
+function sel.add(s : BulkBulldozerStroke, c : BulkBulldozerCandidate) : boolean
+	if c == nil or c.entity == nil or s.keep[c.entity] ~= nil then return false end
+	if c.reason ~= nil then
+		if s.skipped[c.entity] == nil then
+			s.skipped[c.entity] = c.reason
+			s.reasonCounts[c.reason] = (s.reasonCounts[c.reason] or 0) + 1
+		end
+		return false
+	end
+	if #s.order >= sel.STROKE_CAP then
+		s.capped = true
+		return false
+	end
+	-- A keep always wins over an earlier skip of the same entity (filters changed mid-stroke).
+	local old = s.skipped[c.entity]
+	if old ~= nil then
+		s.skipped[c.entity] = nil
+		s.reasonCounts[old] = s.reasonCounts[old] - 1
+	end
+	s.keep[c.entity] = c
+	s.order[#s.order + 1] = c.entity
+	s.kindCounts[c.kind] = (s.kindCounts[c.kind] or 0) + 1
+	s.objects = s.objects + (c.objects or 0)
+	return true
+end
+
+-- User request 2026-10-08: a Shift stroke takes entities back out of the selection. Removes every
+-- kept entity of `entities` (unknown ones are ignored) and returns how many went. Skip records
+-- stay; the cap note goes once the selection is below the cap again.
+function sel.remove(s : BulkBulldozerStroke, entities : {integer}) : integer
+	local gone : {integer : boolean} = {}
+	local n = 0
+	for _, e in ipairs(entities or {}) do
+		local c = s.keep[e]
+		if c ~= nil and not gone[e] then
+			gone[e] = true
+			n = n + 1
+			s.keep[e] = nil
+			s.kindCounts[c.kind] = s.kindCounts[c.kind] - 1
+			s.objects = s.objects - (c.objects or 0)
+		end
+	end
+	if n == 0 then return 0 end
+	local order : {integer} = {}
+	for _, e in ipairs(s.order) do
+		if not gone[e] then order[#order + 1] = e end
+	end
+	s.order = order
+	if #order < sel.STROKE_CAP then s.capped = false end
+	return n
+end
+
+function sel.entities(s : BulkBulldozerStroke) : {integer}
+	local out : {integer} = {}
+	for i, e in ipairs(s.order) do out[i] = e end
+	return out
+end
+
+function sel.describe(s : BulkBulldozerStroke) : {string}
+	local lines : {string} = {}
+	local kept : {string} = {}
+	for _, k in ipairs(sel.KINDS) do
+		local n = s.kindCounts[k]
+		if n ~= nil and n > 0 then kept[#kept + 1] = string.format("%d %s", n, KIND_LABEL[k]) end
+	end
+	if #kept == 0 then
+		lines[#lines + 1] = "Nothing selected"
+	else
+		local line = "Selected: " .. table.concat(kept, ", ")
+		if s.objects > 0 then line = line .. string.format(" (+%d signals/stops)", s.objects) end
+		lines[#lines + 1] = line
+	end
+	local skipped : {string} = {}
+	for _, r in ipairs(sel.REASONS) do
+		local n = s.reasonCounts[r]
+		if n ~= nil and n > 0 then skipped[#skipped + 1] = string.format("%d %s", n, REASON_LABEL[r]) end
+	end
+	if #skipped > 0 then lines[#lines + 1] = "Skipped: " .. table.concat(skipped, ", ") end
+	if s.capped then
+		lines[#lines + 1] = string.format("Limit of %d reached", sel.STROKE_CAP)
+	end
+	return lines
+end
+
+-- Display formats per skip reason (translated at use time; GUI script).
+local function reasonFormats() : {string : string}
+	return {
+		filtered = _("%d filtered"),
+		underground = _("%d underground"),
+		surface = _("%d on the ground"),
+		tram_only = _("%d tram track"),
+		industry = _("%d industry"),
+		hq = _("%d HQ"),
+		part = _("%d part of a construction"),
+		foreign = _("%d other player"),
+		not_player = _("%d not yours"),
+		gone = _("%d gone"),
+	}
+end
+
+function sel.skipLines(s : BulkBulldozerStroke) : {string}
+	local lines : {string} = {}
+	local formats = reasonFormats()
+	local skipped : {string} = {}
+	for _i, r in ipairs(sel.REASONS) do
+		local n = s.reasonCounts[r]
+		if n ~= nil and n > 0 then skipped[#skipped + 1] = string.format(formats[r], n) end
+	end
+	if #skipped > 0 then lines[#lines + 1] = string.format(_("Skipped: %s"), table.concat(skipped, ", ")) end
+	if s.capped then
+		lines[#lines + 1] = string.format(_("Limit of %d reached"), sel.STROKE_CAP)
+	end
+	return lines
+end
+
+return sel

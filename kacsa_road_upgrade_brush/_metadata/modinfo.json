@@ -1,0 +1,15 @@
+{
+    "name": "Road Upgrade Brush",
+    "summary": "Combined road upgrade tool, with a brush that upgrades many segments at once (work in progress).",
+    "description": "Private build. Step 1: the single-click street upgrader of Road Upgrade All in One by kurowasiichi. Brush selection is planned, based on Bulk Bulldozer by square17.",
+    "authors": [
+        {
+            "name": "Kacsa",
+            "role": "CREATOR"
+        }
+    ],
+    "tags": [
+        "Script Mod"
+    ],
+    "url": ""
+}

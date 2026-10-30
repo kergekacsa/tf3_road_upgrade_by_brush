@@ -1,0 +1,34 @@
+{
+  "modId": "kacsa_road_upgrade_brush",
+  "revision": 1,
+  "dependencies": null,
+  "incompatibilities": null,
+  "options": null,
+  "preRunScript": {
+    "fileName": ""
+  },
+  "runScript": {
+    "fileName": ""
+  },
+  "postRunScript": {
+    "fileName": ""
+  },
+  "severityAdd": "None",
+  "severityRemove": "None",
+  "cosmetic": false,
+  "visible": true,
+  "url": "",
+  "params": [
+    {
+      "key": "sqperf_log",
+      "name": "Debug: performance log",
+      "tooltip": "Off: normal play. On: every 30 s, this mod writes how long its brush samples, previews and tool renders took to the game's log file (stdout.txt, lines starting with [SQPERF]), plus its detailed mouse-event log. Only for tracking down slowdowns; leave it Off otherwise. Slow calls are always logged briefly, whatever this setting.",
+      "uiType": "Button",
+      "values": [
+        "Off",
+        "On"
+      ],
+      "defaultIndex": 0
+    }
+  ]
+}
