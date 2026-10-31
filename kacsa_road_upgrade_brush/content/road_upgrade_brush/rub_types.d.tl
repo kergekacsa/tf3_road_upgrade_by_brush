@@ -1,3 +1,4 @@
+-- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083). Private build, not for publication.
 -- Global names use the prefix Rub: globals are shared by all loaded mods.
 
 global record RubRoadType

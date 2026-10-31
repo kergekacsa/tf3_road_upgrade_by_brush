@@ -77,6 +77,7 @@ local function reasonLabels() : {string : string}
 		["nothing left to remove"] = _("nothing left to remove"),
 		["script error"] = _("script error"),
 		["command limit reached"] = _("command limit reached"),
+		["previous upgrade still running"] = _("previous upgrade still running"),
 		["refused by the game"] = _("refused by the game"),
 		["Pause the game first"] = _("Pause the game first"),
 	}

@@ -14,6 +14,7 @@ local upgrade : RubCommit = {}
 upgrade.MAX_COMMANDS = sel.STROKE_CAP
 
 local REFUSED_BY_GAME <const> = "refused by the game"
+local STILL_RUNNING <const> = "previous upgrade still running"
 local EXTRAS_NOT_APPLIED <const> = "bus lane or lock could not be set"
 
 -- Pause in seconds after each command: the game still works on the world change of a command when its callback runs.
@@ -26,11 +27,20 @@ local segmentLogged = false
 local pendingStep : function() = nil
 local pendingDueAt : number = 0
 
--- Stops the running commit; nil when none runs.
-local cancelRunning : function() = nil
+-- The commit that runs; nil when none runs. At most one commit runs at a time.
+-- cancel() ends it after the command in progress. abort() ends it at once and ignores every later callback of it.
+local record Running
+	cancel : function()
+	abort : function()
+end
+local running : Running = nil
 
 function upgrade.cancel()
-	if cancelRunning ~= nil then cancelRunning() end
+	if running ~= nil then running.cancel() end
+end
+
+function upgrade.abort()
+	if running ~= nil then running.abort() end
 end
 
 local REASON_TEXT : {string : string} = {
@@ -204,8 +214,9 @@ end
 -- The bus lane, tram track and catenary of Road Upgrade All in One, put on the new segments. They differ from the plain
 -- proposal in the transport modes of the outer driving lanes (bus lane: no car; tram track: the tram; catenary: the
 -- electric tram) and, with the lock, in the lock flag of the segment. The getters may hand out copies: it writes back
--- at every level. The result is false when the lanes read back from the proposal differ from the meant ones. Such a
--- proposal MUST NOT be sent: lanes with wrong modes can stop the game in its transport network.
+-- at every level. The result is false when the lanes read back from the proposal differ from the meant ones, or when a
+-- lane that was not edited differs from what it was. Such a proposal MUST NOT be sent: lanes with wrong modes can
+-- stop the game in its transport network.
 local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
 	local modes = api.type["enum"].TransportMode
 	local car = modeNumber(modes.CAR)
@@ -217,10 +228,14 @@ local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
 	local notes : {string} = {}
 	-- the lanes meant per segment: segment index -> lane index -> mode numbers
 	local meant : {integer : {integer : {integer : boolean}}} = {}
+	-- the modes of every lane before the edit: segment index -> lane index -> mode numbers
+	local snapshot : {{{integer : boolean}}} = {}
 	for s, segment in ipairs(segments) do
 		local comp = segment.comp
 		if extras.busLane or extras.tram then
 			meant[s] = {}
+			snapshot[s] = {}
+			for i, lane in ipairs(comp.laneConfigs) do snapshot[s][i] = modeSet(lane) end
 			local lanes = comp.laneConfigs
 			for _, i in ipairs(outerVehicleLanes(lanes)) do
 				local lane = lanes[i]
@@ -248,10 +263,17 @@ local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
 	local readBack = p.proposal.addedSegments
 	for s, perLane in pairs(meant) do
 		local lanes = readBack[s].comp.laneConfigs
-		for i, want in pairs(perLane) do
-			if not sameSet(modeSet(lanes[i]), want) then
-				verified = false
-				notes[#notes + 1] = string.format("segment %d lane %d reads back %s", s, i, modesText(lanes[i]))
+		if #lanes ~= #snapshot[s] then
+			verified = false
+			notes[#notes + 1] = string.format("segment %d has %d lanes, had %d", s, #lanes, #snapshot[s])
+		else
+			-- Every lane: the edited ones read back as meant, the others as they were.
+			for i = 1, #lanes do
+				local want = perLane[i] or snapshot[s][i]
+				if not sameSet(modeSet(lanes[i]), want) then
+					verified = false
+					notes[#notes + 1] = string.format("segment %d lane %d reads back %s", s, i, modesText(lanes[i]))
+				end
 			end
 		end
 	end
@@ -496,10 +518,16 @@ local function sendSpeed(speed : integer, done : function(boolean))
 	if not ok then done(false) end
 end
 
--- Calls proceed(true) when the game is paused, after pausing it if it ran; proceed(false) when it stays running.
+-- Calls proceed(true) when the game is paused, after pausing it if it ran; proceed(false) when it stays running or its
+-- speed cannot be read.
 local function ensurePaused(logLine : function(string), proceed : function(boolean))
 	local speed = gameSpeed()
-	if speed == nil or speed == 0 then
+	if speed == nil then
+		logLine("game speed unreadable, no command is sent")
+		proceed(false)
+		return
+	end
+	if speed == 0 then
 		proceed(true)
 		return
 	end
@@ -545,15 +573,27 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		industryRoads : {integer : boolean}, onDone : function(RubCommitResult), logFn : function(string),
 		onRoad : function(integer, boolean, integer, integer, integer))
 	local t0 = os.clock()
-	segmentLogged = false
 	extras = extras or { busLane = false, tram = false, catenary = false, lock = false }
-	pendingStep = nil   -- an unfinished commit (tool closed) must not continue
 	local logLine = logFn or function(_s : string) end
 	edges = edges or {}
 	local res : RubCommitResult = {
 		requested = #edges, removed = 0, unchanged = 0, failed = {}, skipped = 0, reasons = {}, commands = 0,
 		refused = nil, cost = nil, seconds = 0,
 	}
+	if running ~= nil then
+		-- The roads stay selected: a refusal reports them as failed.
+		logLine("upgrade refused: the previous upgrade is still running")
+		res.refused = STILL_RUNNING
+		res.skipped = res.requested
+		for i, e in ipairs(edges) do res.failed[i] = e end
+		if onDone ~= nil then
+			local okD, errD = pcall(function() : string onDone(res); return nil end)
+			if not okD then logLine("upgrade onDone failed: " .. tostring(errD)) end
+		end
+		return
+	end
+	segmentLogged = false
+	pendingStep = nil
 	local finished = false
 	local cancelled = false
 	-- A pause or a command is on its way: its callback ends a cancelled commit.
@@ -580,10 +620,11 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	local function skip(reason : string, n? : integer)
 		res.reasons[reason] = (res.reasons[reason] or 0) + (n or 1)
 	end
+	local mine : Running = {}
 	local function finish()
 		if finished then return end
 		finished = true
-		cancelRunning = nil
+		if running == mine then running = nil end
 		res.cancelled = cancelled
 		if speedBeforePause ~= nil then
 			local speed = speedBeforePause
@@ -604,13 +645,21 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			if not ok then logLine("upgrade onDone failed: " .. tostring(err)) end
 		end
 	end
-	cancelRunning = function()
+	mine.cancel = function()
 		if finished or cancelled then return end
 		cancelled = true
 		pendingStep = nil
 		logLine("upgrade cancelled by the user")
 		if not busy then finish() end
 	end
+	mine.abort = function()
+		if finished then return end
+		cancelled = true
+		pendingStep = nil
+		logLine("upgrade aborted: no answer from the game")
+		finish()
+	end
+	running = mine
 	local function skipDropped(dropped : {integer : string}, where : string)
 		local n = 0
 		for e, r in pairs(dropped) do
@@ -655,7 +704,8 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	-- Set when the game could not be paused: no further command is sent.
 	local pauseFailed = false
 
-	-- Roads whose command failed with "Collision" and where only asset groups are in the way: road -> asset groups.
+	-- Roads whose command failed with one message and where only asset groups are in the way (the message is the game's
+	-- translated "Collision"): road -> asset groups.
 	-- The first retry puts them in the removal list of the proposal; the second retry also sends it with ignoreErrors.
 	-- Both need the option "Remove buildings in the way".
 	local assetBlockers : {integer : {integer}} = {}
@@ -679,6 +729,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		busy = true
 		ensurePaused(logLine, function(paused : boolean)
 			busy = false
+			if finished then return end
 			if cancelled then
 				finish()
 				return
@@ -689,7 +740,40 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 				done()
 				return
 			end
-			local p, summary, why = proposalOf(e, template, decorations, extras)
+			local p : Proposal = nil
+			local summary : string = nil
+			local why : string = nil
+			local context : Context = nil
+			local force = false
+			-- The game calls this from its own thread: an error in the preparation fails the road, not the whole run.
+			local okP, errP = pcall(function() : string
+				p, summary, why = proposalOf(e, template, decorations, extras)
+				if p == nil then return nil end
+				context = makeContext(removeBuildings)
+				local blockers = removeBuildings and attempt > 0 and assetBlockers[e] or nil
+				if blockers ~= nil then
+					-- An earlier road of this press may have removed a shared asset group; the game refuses a removal list
+					-- with an entity that is gone ("Unknown exception" in PreprocessProposal).
+					local remaining : {integer} = {}
+					for _, a in ipairs(blockers) do
+						if api.engine.entityExists(a) then remaining[#remaining + 1] = a end
+					end
+					blockers = #remaining > 0 and remaining or nil
+				end
+				force = blockers ~= nil and attempt >= RETRY_PASSES
+				if blockers ~= nil then
+					addToRemove(p, blockers)
+					summary = summary .. string.format("; %d asset groups in the way put in toRemove%s", #blockers,
+						force and ", sent with ignoreErrors" or "")
+				end
+				return nil
+			end)
+			if not okP then
+				logLine(string.format("edge %d: preparing the command failed: %s", e, tostring(errP)))
+				fail(e, "script error")
+				done()
+				return
+			end
 			if p == nil then
 				fail(e, why or REFUSED_BY_GAME)
 				logLine(string.format("edge %d: %s", e, summary))
@@ -698,27 +782,10 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			end
 			local called = false
 			busy = true
-			local context = makeContext(removeBuildings)
-			local blockers = removeBuildings and attempt > 0 and assetBlockers[e] or nil
-			if blockers ~= nil then
-				-- An earlier road of this press may have removed a shared asset group; the game refuses a removal list
-				-- with an entity that is gone ("Unknown exception" in PreprocessProposal).
-				local remaining : {integer} = {}
-				for _, a in ipairs(blockers) do
-					if api.engine.entityExists(a) then remaining[#remaining + 1] = a end
-				end
-				blockers = #remaining > 0 and remaining or nil
-			end
-			local force = blockers ~= nil and attempt >= RETRY_PASSES
-			if blockers ~= nil then
-				addToRemove(p, blockers)
-				summary = summary .. string.format("; %d asset groups in the way put in toRemove%s", #blockers,
-					force and ", sent with ignoreErrors" or "")
-			end
 			local okS, errS = pcall(function() : string
 				local cmd = api.cmd.makeWorldBuildProposalCmd(p, context, force, true, true)
 				api.cmd.sendCommand(cmd, function(data : WorldBuildProposalCommandData, success : boolean)
-					if called then return end
+					if called or finished then return end
 					called = true
 					busy = false
 					res.commands = res.commands + 1
@@ -734,7 +801,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 						fail(e, msgs[1] or REFUSED_BY_GAME)
 						outcome = "FAILED"
 						local assets, onlyAssets = assetGroupsOf(data, e)
-						assetBlockers[e] = (onlyAssets and #msgs == 1 and msgs[1] == "Collision") and assets or nil
+						assetBlockers[e] = (onlyAssets and #msgs == 1) and assets or nil
 					end
 					logLine(string.format("cmd %d%s: edge %d -> %s%s; %s; %s; %s", res.commands, attempt > 0 and string.format(" (retry %d)", attempt) or "", e,
 						outcome, #msgs > 0 and (": " .. table.concat(msgs, "; ")) or "", simulationText(), summary,

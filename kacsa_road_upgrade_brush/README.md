@@ -27,6 +27,8 @@ A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool i
 - A road whose command fails is tried again twice, each time after all other roads. Roads that still fail stay selected, so another press tries them again.
 - "Remove buildings in the way" is on by default. A town road with building lots can fail with "Unexpected parcel on a segment". The brush cannot upgrade such a road and does not demolish any house for it. It stays selected and counts as failed. Upgrade it with the single-click tool of Road Upgrade All in One, which moves or removes the houses itself.
 - A road that a placed asset (an asset group such as a decoration, a tree group, or a rock) blocks fails with "Collision". With "Remove buildings in the way" on, the first retry removes the asset, and the last retry sends the build with the game's errors ignored, as the Build Anyway mod does. The removal on the first retry is confirmed in the game; the forced build on the last retry is not.
+- The brush sends commands only while the game is paused. If it cannot read the game speed or cannot pause the game, it sends nothing and the roads stay selected with the note "Pause the game first".
+- If the game gives no answer for 120 seconds, the tool gives up, sets the game speed back, and shows "No answer from the game". Only one upgrade runs at a time: a press while the previous upgrade still runs sends nothing and shows "previous upgrade still running".
 - The cost is known only after the upgrade. There is no cost preview.
 - There is no undo.
 - The tool remembers the radius, road type, trees, barrier, bus lane, tram track, lock, and "Remove buildings in the way" during one game session. A new session starts with the defaults.
@@ -38,7 +40,7 @@ A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool i
 
 ## Credits and use
 
-- The road types, add-ons, and rules are taken from "Road Upgrade All in One" by kurowasiichi (mod.io 6487083). The headers of the copied files name the author. The tool icon and the mod.io image are drawn for this mod.
+- The road types, add-ons, and rules are taken from "Road Upgrade All in One" by kurowasiichi (mod.io 6487083). The headers of the copied files name the author. The road type, option, and problem texts in `strings.json` (English and the Traditional Chinese translation, 25 keys each) are copies of the texts of that mod, with the keys renamed to `rub_*`. The tool icon and the mod.io image are drawn for this mod.
 - The brush, selection, highlight, and toolbar code is taken from "Bulk Bulldozer" by square17 (mod.io 6434884). The headers of the copied files name the authors.
 - This mod is for private use. Do not publish it without permission from both authors.
 

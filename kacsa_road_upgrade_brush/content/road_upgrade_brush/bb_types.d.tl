@@ -292,6 +292,9 @@ global record RubCommit
 	--- Stops the running commit after the road in progress; onDone then runs with cancelled set. Does nothing
 	--- when no commit runs.
 	cancel : function()
+	--- Ends the running commit at once and ignores every later callback of it; the game speed is set back. onDone runs
+	--- with cancelled set. The tool calls it when a commit has had no answer for too long. Does nothing when no commit runs.
+	abort : function()
 	--- One log line about a road: kind, template, edge objects, decorations, parcels.
 	describeRoad : function(edge : integer) : string
 	--- The cost is unknown before the upgrade: makeProposalData rejects the proposal replaceSegment returns.
@@ -310,7 +313,8 @@ global record RubCommit
 	--- pass, the number of roads in this pass, and the pass (0 = first, 1 and 2 = retries). At the start of a retry pass it
 	--- runs once with no road (edge nil) and 0 done.
 	--- With `removeBuildings` the commands also demolish the buildings that block a road; without it such a road is
-	--- skipped. onDone runs once, possibly from a sendCommand callback. In the result, `removed` counts the upgraded
+	--- skipped. Only one commit runs at a time: while one runs, a new commit sends nothing and onDone runs at once with
+	--- `refused` set and every road in `failed`. onDone runs once, possibly from a sendCommand callback. In the result, `removed` counts the upgraded
 	--- roads and `cost` is what the game charged for them (nil when it reports none).
 	commit : function(edges : {integer}, template : string, extras : RubExtras, removeBuildings : boolean, ctx : RubContext,
 		industryRoads : {integer : boolean},

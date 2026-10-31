@@ -171,7 +171,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-10-31 aw"
+local BUILD <const> = "2026-10-31 az"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -1256,6 +1256,8 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		if s ~= nil and s.phase == PHASE_COMMITTING and now - (s.commitAt or now) > COMMIT_TIMEOUT then
 			logMsg(string.format("commit: no final callback after %d s, giving up waiting", math.floor(COMMIT_TIMEOUT)))
 			refJob:set(refJob:get() + 1)
+			-- The new job number makes the commit's onDone a no-op; abort sets the game speed back and frees the commit.
+			pcall(commit.abort)
 			refResult:set({ text = { head = _("No answer from the game"), detail = _("Check what was upgraded"), severity = "error" }, untilAt = now + RESULT_SECONDS })
 			resetToIdle()
 		end
@@ -1716,8 +1718,8 @@ local Ret = {
 		local params : {ConstructionMenuParam} = {
 			{
 				key = KEY_RADIUS,
-				name = _("Radius"),
-				tooltip = _("Size of the brush."),
+				name = _("Brush radius"),
+				tooltip = _("Size of the brush. The keys M (larger) and N (smaller) change it too."),
 				values = brush.radiusLabels(),
 				numbers = brush.RADII,
 				defaultIndex = defaultRadiusIndex,
