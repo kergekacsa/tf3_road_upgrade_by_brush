@@ -342,7 +342,8 @@ local function carriesExtras(comp : Engine.Component.BaseEdge, template : string
 	return true
 end
 -- The proposal that replaces the road with the template, and one log line about it.
-local function proposalOf(edge : integer, template : string, decorations : {{integer, boolean}}, extras : RubExtras) : Proposal, string, string
+-- `setDecorations`: the list is set even when it is empty (a track whose barrier is removed).
+local function proposalOf(edge : integer, template : string, decorations : {{integer, boolean}}, extras : RubExtras, setDecorations? : boolean) : Proposal, string, string
 	local ok, p = pcall(api.engine.util.proposal.replaceSegment, edge, template)
 	if not ok or p == nil then return nil, "replaceSegment failed: " .. tostring(p), nil end
 	local summary = ""
@@ -360,7 +361,7 @@ local function proposalOf(edge : integer, template : string, decorations : {{int
 			summary = summary .. string.format(", edge objects %d -> %d%s", oldObjects, newObjects, newObjects < oldObjects and " (OBJECTS LOST)" or "")
 			return nil
 		end)
-		if #decorations > 0 then
+		if #decorations > 0 or setDecorations then
 			local before = decorationCount(p)
 			applyDecorations(p, decorations)
 			summary = summary .. string.format(", decorations %d -> %d (wanted %d per segment)",
@@ -756,8 +757,15 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	local function upgradeRoad(e : integer, attempt : integer, done : function())
 		local target = template
 		local same : boolean
+		local wanted = decorations
+		local setWanted = false
 		if railTarget ~= nil then
-			target, same = railTarget(e)
+			local railDecorations : {{integer, boolean}} = nil
+			target, same, railDecorations = railTarget(e)
+			if railDecorations ~= nil then
+				wanted = railDecorations
+				setWanted = true
+			end
 			if target == nil then
 				skip(REASON_TEXT.track_type)
 				logLine(string.format("edge %d: no target template for this track, left alone", e))
@@ -802,7 +810,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			local force = false
 			-- The game calls this from its own thread: an error in the preparation fails the road, not the whole run.
 			local okP, errP = pcall(function() : string
-				p, summary, why = proposalOf(e, target, decorations, extras)
+				p, summary, why = proposalOf(e, target, wanted, extras, setWanted)
 				if p == nil then return nil end
 				context = makeContext(removeBuildings)
 				local blockers = removeBuildings and attempt > 0 and assetBlockers[e] or nil

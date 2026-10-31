@@ -15,6 +15,7 @@ local MODE_ROADS <const> = 1
 local MODE_RAILS <const> = 2
 local TRACK_TYPE_KEY <const> = "rub_trackType"
 local TRACK_STATE_KEY <const> = "rub_trackCatenary"
+local TRACK_BARRIER_KEY <const> = "rub_trackBarrier"
 local DEFAULT_TRACK_TYPE <const> = 2
 local RAIL_STATES : {string} = { "keep", "add", "remove" }
 local ROAD_TYPE_KEY <const> = "rub_roadType"
@@ -110,7 +111,7 @@ end
 
 -- The menu remembers values by key: a remembered position can lie outside the choices offered in the game year.
 -- A type without catenary in the game year has no catenary choice in the toolbar: its tracks get no catenary.
-local function trackChoices(params : {string : number}) : integer, string
+local function trackChoices(params : {string : number}) : integer, string, string
 	local year = api.engine.util.getYear()
 	local offered = rails.offeredTypes(year)
 	local trackType = 1
@@ -118,8 +119,9 @@ local function trackChoices(params : {string : number}) : integer, string
 		trackType = math.floor((params or {})[trackTypeKey(offered)] or defaultTrackType(offered))
 		if trackType < 1 or trackType > offered then trackType = defaultTrackType(offered) end
 	end
-	if not rails.hasCatenary(trackType, year) then return trackType, "remove" end
-	return trackType, RAIL_STATES[math.floor((params or {})[TRACK_STATE_KEY] or 1)] or "keep"
+	local barrier = RAIL_STATES[math.floor((params or {})[TRACK_BARRIER_KEY] or 1)] or "keep"
+	if not rails.hasCatenary(trackType, year) then return trackType, "remove", barrier end
+	return trackType, RAIL_STATES[math.floor((params or {})[TRACK_STATE_KEY] or 1)] or "keep", barrier
 end
 
 local function modeParam(railEntry : boolean) : ConstructionMenuParam
@@ -174,6 +176,19 @@ local function railParams() : {ConstructionMenuParam}
 			return rails.hasCatenary(trackType, api.engine.util.getYear()) and "Enabled" or "Hidden"
 		end,
 	}
+	local barrierParam : ConstructionMenuParam = {
+		key = TRACK_BARRIER_KEY,
+		name = _("rub_barrier_name"),
+		tooltip = _("rub_trackBarrier_tooltip"),
+		values = { _("rub_lock_keep"), _("rub_state_add"), _("rub_state_remove") },
+		defaultIndex = 1,
+		uiType = api.type["enum"].ScriptParamType.ComboBox,
+		yearFrom = 0,
+		yearTo = 0,
+		resetOnMenuClose = false,
+	}
+	disabledUnderground(barrierParam)
+	result[#result + 1] = barrierParam
 	for _, param in ipairs(result) do onlyInMode(param, true) end
 	return result
 end
@@ -292,25 +307,27 @@ end
 
 -- The rail choice as one text, for the caches that depend on it.
 function brushOptions.railKey(params : {string : number}) : string
-	local trackType, state = trackChoices(params)
-	return "rail/" .. trackType .. "/" .. state
+	local trackType, state, barrier = trackChoices(params)
+	return "rail/" .. trackType .. "/" .. state .. "/" .. barrier
 end
 
 function brushOptions.railTargeter(params : {string : number}) : RubRailTarget
-	local trackType, state = trackChoices(params)
-	return rails.targeter(trackType, state, api.engine.util.getYear())
+	local trackType, state, barrier = trackChoices(params)
+	return rails.targeter(trackType, state, api.engine.util.getYear(), barrier)
 end
 
 function brushOptions.trackName(clone : RubTrackClone) : string
 	return rails.typeName(clone.trackType)
 end
 
--- The catenary of a track is copied as Add or Remove: the copy sets exactly what the track has.
+-- The catenary and the noise barrier of a track are copied as Add or Remove: the copy sets exactly what the track has.
+-- A track that cannot show a barrier (tunnel, quiet copy) leaves the barrier choice as it is.
 function brushOptions.applyTrack(menu : ConstructionMenuParamsAPI, clone : RubTrackClone) : boolean
 	local offered = rails.offeredTypes(api.engine.util.getYear())
 	local typeSet = clone.trackType <= offered and (offered == 1 or setParam(menu, trackTypeKey(offered), clone.trackType))
 	local stateSet = setParam(menu, TRACK_STATE_KEY, clone.catenary and 2 or 3)
-	return typeSet and stateSet
+	local barrierSet = clone.barrier == nil or setParam(menu, TRACK_BARRIER_KEY, clone.barrier and 2 or 3)
+	return typeSet and stateSet and barrierSet
 end
 
 return brushOptions

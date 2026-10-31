@@ -139,7 +139,11 @@ function clone.readTrack(edge : integer) : RubTrackClone
 	if be == nil then return nil end
 	local trackType, catenary = rails.parse(be.roadTemplate)
 	if trackType == nil then return nil end
-	return { trackType = trackType, catenary = catenary }
+	local barrier : boolean = nil
+	if be.type ~= api.type.enum.BaseEdgeType.TUNNEL and not rails.isQuiet(be.roadTemplate) then
+		barrier = rails.hasBarrier(be.edgeDecorations)
+	end
+	return { trackType = trackType, catenary = catenary, barrier = barrier }
 end
 
 return clone

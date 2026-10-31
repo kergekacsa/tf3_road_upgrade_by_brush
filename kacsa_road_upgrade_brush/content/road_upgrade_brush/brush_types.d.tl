@@ -47,6 +47,7 @@ end
 global record RubTrackClone
 	trackType : integer     -- index in `rails.TYPES`
 	catenary : boolean
+	barrier : boolean      -- the track has a noise barrier of the game on a side; nil for a tunnel or a quiet copy, which cannot show it
 end
 
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_clone.tl" as RubBrushClone
@@ -65,14 +66,20 @@ global record RubRails
 	TYPES : {string}
 	--- The street template of a base track type, with or without catenary.
 	template : function(typeIndex : integer, catenary : boolean) : string
-	--- The type (an index in TYPES) and the catenary of a base track template. nil when the template is none of the six.
+	--- The type (an index in TYPES) and the catenary of a track template, also of the quiet copy of Station Noise Barriers. nil when the template is none of the twelve.
 	parse : function(resName : string) : integer, boolean
 	--- The number of track types offered in the year, counted from the first.
 	offeredTypes : function(year : integer) : integer
 	--- Whether the game offers the catenary twin of a track type in the year.
 	hasCatenary : function(typeIndex : integer, year : integer) : boolean
-	--- Per track: the template the upgrade gives it, and whether it has that template already. nil when the track has no base template or the target is not available.
-	targeter : function(typeIndex : integer, state : string, year : integer) : RubRailTarget
+	--- Per track: the template the upgrade gives it, whether the track is the target already, and the decoration list to set (nil: leave it). The template is nil when the track has no base template or the target is not available. The barrier is "keep", "add" or "remove".
+	targeter : function(typeIndex : integer, state : string, year : integer, barrier : string) : RubRailTarget
+	--- Whether a track template is a quiet copy of another track template (Station Noise Barriers).
+	isQuiet : function(resName : string) : boolean
+	--- Whether a decoration list holds a noise barrier of the game for tracks on a side.
+	hasBarrier : function(decorations : {{integer, boolean}}) : boolean
+	--- The id of the track noise barrier that the game offers in the year. nil when it offers none.
+	barrierId : function(year : integer) : integer
 	--- The name the game gives the plain template of a type.
 	typeName : function(typeIndex : integer) : string
 end

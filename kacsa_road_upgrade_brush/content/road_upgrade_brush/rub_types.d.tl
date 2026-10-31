@@ -21,8 +21,8 @@ global record RubTemplates
 	isAvailable : function(resName : string, year : integer) : boolean
 end
 
---- Per track: the template an upgrade gives it, and whether it has that template already. nil when it gets none.
-global type RubRailTarget = function(edge : integer) : string, boolean
+--- Per track: the template an upgrade gives it, whether it is the target already (template and barrier), and the complete decoration list to set (nil: leave the decorations). The template is nil when it gets none.
+global type RubRailTarget = function(edge : integer) : string, boolean, {{integer, boolean}}
 
 global record RubChoices
 	roadType : integer

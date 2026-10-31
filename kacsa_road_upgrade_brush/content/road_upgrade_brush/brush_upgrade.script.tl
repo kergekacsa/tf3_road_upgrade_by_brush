@@ -181,7 +181,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-10-31 bl"
+local BUILD <const> = "2026-10-31 bs"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -928,6 +928,9 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		logMsg("upgrade cancelled (Esc)")
 		commit.cancel()
 	end
+	local function closeTool()
+		refParam:get().abort()
+	end
 	local function cancelPending(why : string)
 		refResult:set(nil)
 		local s = refSel:get()
@@ -1454,7 +1457,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		say(_("Settings copied"), c.editedLanes and _("Lanes edited: bus lane/tram off") or brushOptions.roadTypeName(c), nil)
 	end
 
-	-- Middle click in the Rails mode: the track type and the catenary of the track under the cursor become the settings of the toolbar.
+	-- Middle click in the Rails mode: the track type, the catenary and the noise barrier of the track under the cursor become the settings of the toolbar.
 	local function copyTrack()
 		local cur = cursorState:old()
 		if cur == nil then
@@ -1483,10 +1486,13 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			return
 		end
 		local allSet = brushOptions.applyTrack(menu, c)
-		logMsg(string.format("copy: track edge %d, track type %d, catenary %s, toolbar %s; %s",
-			edge, c.trackType, tostring(c.catenary), allSet and "set" or "not fully set", tostring(note)))
+		logMsg(string.format("copy: track edge %d, track type %d, catenary %s, barrier %s, toolbar %s; %s",
+			edge, c.trackType, tostring(c.catenary), tostring(c.barrier), allSet and "set" or "not fully set", tostring(note)))
 		local name = brushOptions.trackName(c)
-		say(_("Settings copied"), c.catenary and (name .. " + " .. _("Catenary")) or name, nil)
+		local detail = name
+		if c.catenary then detail = detail .. " + " .. _("Catenary") end
+		if c.barrier then detail = detail .. " + " .. _("rub_barrier_name") end
+		say(_("Settings copied"), detail, nil)
 	end
 
 	local function copyUnderPointer()
@@ -1827,7 +1833,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			-- Back (ESC) clears the selection first; otherwise it leaves the tool.
 			onBack = function()
 				logEsc("back")
-				if isCommitting() then cancelUpgrade() elseif hasPending() then cancelPending("back") else param.abort() end
+				if isCommitting() then cancelUpgrade() elseif hasPending() then cancelPending("back") else closeTool() end
 			end,
 			children = children,
 		}
@@ -2104,8 +2110,8 @@ local Ret = {
 			description = isRailEntry
 				and _("Upgrade tracks with a brush: paint over the tracks to select them, then press \"Upgrade\". Right-click or Esc clears the selection. Only simple, standard and high-speed tracks are changed.")
 				or _("Upgrade roads with a brush: paint over the roads to select them, then press \"Upgrade\". \"Clear\", right-click or Esc clears the selection. One-way road types are not offered."),
-			icon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/brush_tool.tga" },
-			previewIcon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/brush_tool_preview.tga" },
+			icon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/" .. (isRailEntry and "brush_tool_rail.tga" or "brush_tool.tga") },
+			previewIcon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/" .. (isRailEntry and "brush_tool_rail_preview.tga" or "brush_tool_preview.tga") },
 			availability = { yearFrom = 0, yearTo = 0 },
 			action = "ACTION_CUSTOM",
 			customAction = makeCustomAction(RubAction),
