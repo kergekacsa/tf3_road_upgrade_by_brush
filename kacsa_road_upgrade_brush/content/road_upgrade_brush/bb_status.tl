@@ -1,17 +1,13 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Bulk Bulldozer toolbar status (user request 2026-10-07, PLAN "Toolbar"): the selection is shown
--- in the construction options bar as a two-line status chip instead of the cursor tooltip.
--- PURE: no api.* calls (money is formatted by the caller), unit-tested offline
--- (tests/square_bulk_bulldozer/test_status.lua).
+-- Toolbar status: the selection is shown in the construction options bar as a status chip instead of the cursor
+-- tooltip. PURE: no api.* calls (money is formatted by the caller).
 
 local status : BulkBulldozerStatus = {}
 
--- The bar is 314 UI px wide with 8 px padding (construction.css.lua:723-727) and the button adds
--- 8 px padding per side (builtin.css.lua:140-145), so ~280 px for text: about 36 body-font
--- characters. Longer lines are clipped here (with "...") rather than cut by the engine.
+-- The bar is 314 UI px wide with 8 px padding and the button adds 8 px padding per side, so ~280 px for text: about
+-- 36 body-font characters. Longer lines are clipped here (with "...") rather than cut by the engine.
 -- Width is counted per character, CJK / Hangul / full-width glyphs as 2 (status.width), so
 -- translated lines clip at the same pixel width as English ones.
--- Unverified in game: tune after the first look at the chip.
 status.MAX_CHARS = 36
 status.MAX_KIND_PARTS = 3
 
@@ -132,7 +128,7 @@ end
 -- Width of the text progress bar in the chip while roads are upgraded.
 local PROGRESS_BAR_WIDTH <const> = 10
 
--- The third line while roads are upgraded: Esc closes the tool in most cases, the Clear button stops the upgrade and keeps it open.
+-- The third line while roads are upgraded: Esc may close the tool, the Cancel button stops the upgrade and keeps it open.
 local function stopHint() : string
 	return _("Cancel button stops the progress")
 end

@@ -1,5 +1,6 @@
 -- Upgrade step of the brush tool (API layer, GUI thread only). It builds one street template proposal per
--- road with replaceSegment and sends the proposals one after the other. It never sends ignoreErrors = true.
+-- road with replaceSegment and sends the proposals one after the other. It sends ignoreErrors = true only for the last
+-- retry of a road that nothing but asset groups blocks.
 -- Every road is checked against the hard rules again on fresh engine reads right before its command,
 -- because the commands before it may have changed the street network. A road that already is the target
 -- is left alone. A road whose command fails is tried again, twice, after all the others.
@@ -23,7 +24,7 @@ local COMMAND_GAP <const> = 0.1
 -- Failed roads are tried again this many times, each time after all the others.
 local RETRY_PASSES <const> = 2
 
--- Set once the segment of the first proposal of a press is in the log (test of the extra options).
+-- Set once the segment of the first proposal of a press is in the log.
 local segmentLogged = false
 
 local pendingStep : function() = nil
@@ -177,9 +178,8 @@ end
 
 -- The game gives out the transport modes of a lane as a table with the mode numbers 0 to 15 as keys, but it takes
 -- them in as a list of 16 booleans, one per mode, counted from 1: the mode number plus one is the index. The list
--- must be complete: a table with only some indexes gave the lane the modes 0 and 1. A lane written back with the
--- keys it was read with came out with every mode one number lower (the log of the first bus lane test: modes 2,
--- 3, 4 in, then 2, 3 instead of 3, 4; the same rewrite of unchanged lanes made the game stop).
+-- must be complete: a table with only some indexes gives the lane the modes 0 and 1, and a lane written back with
+-- the keys it was read with comes out with every mode one number lower.
 local MODE_COUNT <const> = 16
 
 local function modeNumber(mode : any) : integer
@@ -210,11 +210,10 @@ end
 
 -- The bus lane, tram track and catenary of the single-click tool, put on the new segments: the game's own proposal for
 -- them differs from the plain one in the transport modes of the outer driving lanes (bus lane: no car; tram track: the
--- tram; catenary: the electric tram) and, with the lock, in the lock flag of the segment. Writes back at every level: the getters may hand out copies. The lanes are read back from the proposal
--- and compared with what was meant; the result is false when they differ, and the proposal must not be sent.
--- The first tram test stopped the game with an assertion in its transport network. It wrote the modes of the lanes with
--- the shifted keys, which gave a vehicle lane the cargo mode; whether a tram lane next to a segment without one is
--- accepted is not known.
+-- tram; catenary: the electric tram) and, with the lock, in the lock flag of the segment. Writes back at every level:
+-- the getters may hand out copies. The lanes are read back from the proposal and compared with what was meant; the
+-- result is false when they differ, and the proposal must not be sent: lanes with wrong modes can stop the game in its
+-- transport network.
 local function applyExtras(p : Proposal, extras : BrushExtras) : boolean, string
 	local modes = api.type["enum"].TransportMode
 	local car = modeNumber(modes.CAR)
@@ -481,9 +480,9 @@ local function simulationText() : string
 	return "simulation unknown"
 end
 
--- The game must be paused while the commands run: with the game running, the simulation moves vehicles on
--- the roads that a command replaces, and the game crashed in that case. The commit pauses the game itself
--- (speed 0) and sets the old speed back when it is done.
+-- The game must be paused while the commands run: with the game running, the simulation moves vehicles on the roads
+-- that a command replaces, and the game can crash in that case. The commit pauses the game itself (speed 0) and sets
+-- the old speed back when it is done.
 local PAUSE_NOTE <const> = "Pause the game first"
 
 -- Speed the game ran at before this module paused it; nil when it did not pause the game.

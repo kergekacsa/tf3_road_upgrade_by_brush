@@ -1,19 +1,7 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Bulk Bulldozer gather layer (PLAN "Architecture": bb_gather.tl). API side of the selection:
--- octree queries → plain BulkBulldozerDesc tables → bb_select.classify. Runs only in the GUI
--- custom-action recipe (GUI thread, research §6). Every engine read is wrapped in pcall so a
--- vanished or odd entity becomes a "gone" skip instead of a Lua error. Read-only: no commands.
---
--- API used (verified against .cache/game/api/tealdef, research §4 / §8):
---   api.engine.util.octree.findEntitiesInCircle   engine/util.d.tl:329
---   api.engine.getComponent / entityExists         engine.d.tl:1690, 1723
---   Engine.Component.BaseEdge (type, objects, node0/1, position0/1, tangent0/1)  engine.d.tl:99-130
---   Engine.Component.Construction (transf, stations, depots, industries, townBuildings,
---     frozenNodes, frozenEdges)                    engine.d.tl:295-335; Mat4f:getTransl type.d.tl:783
---   Engine.Component.PlayerOwned.player / Player.headquarters   engine.d.tl:847-860
---   streetConnectorSystem.getConstructionEntityForEdge/Node/Subconstruction  engine/system.d.tl:240-250
---   api.engine.util.construction.findSegmentsToDelete(con, false)  engine/util.d.tl:827
---   api.engine.util.getPlayer                      engine/util.d.tl:1023
+-- Gather layer: the API side of the selection. Octree queries → plain BulkBulldozerDesc tables →
+-- bb_select.classify. Runs only in the GUI custom-action recipe. Every engine read is wrapped in pcall so a vanished
+-- or odd entity becomes a "gone" skip instead of a Lua error. Read-only: no commands.
 
 local brush = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush.tl" as BulkBulldozerBrush
 local sel = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_select.tl" as BulkBulldozerSelect
@@ -74,8 +62,8 @@ local function conIsIndustry(con : integer, cache : BulkBulldozerGatherCache) : 
 	return v
 end
 
--- Marks every street segment that goes with an industry construction (the same set the base
--- removes with it, industry_util.tl:563-570), so town-style industry roads are never selected.
+-- Marks every street segment that goes with an industry construction (the same set the base game removes with it),
+-- so town-style industry roads are never selected.
 local function protectIndustryRoads(con : integer, cache : BulkBulldozerGatherCache)
 	if cache.industryCons[con] then return end
 	cache.industryCons[con] = true
@@ -92,8 +80,8 @@ local function nodeConstruction(n : integer) : integer
 	return -1
 end
 
--- Descriptors are read in two steps (PERF_REVIEW.md): the octree query is r + EDGE_MARGIN wide, so
--- most entities it returns are not under the brush. The light step reads only what the touch /
+-- Descriptors are read in two steps: the octree query is r + EDGE_MARGIN wide, so most entities it returns are not
+-- under the brush. The light step reads only what the touch /
 -- origin test needs (BASE_EDGE geometry; CONSTRUCTION origin and counts, which also mark
 -- industries); the full step (owner, street, connector lookups, station owner, subconstruction)
 -- runs once the entity is hit, so sel.classify only ever sees complete descriptors (d.full).
@@ -163,12 +151,9 @@ function gather.describeEdge(e : integer, cache : BulkBulldozerGatherCache) : Bu
 	return edgeFull(edgeLight(e, cache), cache)
 end
 
--- Owner of a station/depot construction whose construction entity has no PLAYER_OWNED
--- (Phase 2 flag; research §9). The base reads station ownership from the station group
--- (station_group.tl:855 useOwnershipStepState(stationGroupEntityId); manager_window.tl:295) and
--- depot ownership from the construction (maintenance_station.tl:31). Here: PLAYER_OWNED of every
--- station, its station group and every depot. Fail-safe: no owner found → -1 (unowned, never
--- selected as a station); owners that disagree → OWNER_CONFLICT (also unowned).
+-- Owner of a station/depot construction whose construction entity has no PLAYER_OWNED: the PLAYER_OWNED of every
+-- station, its station group and every depot. Fail-safe: no owner found → -1 (unowned, never selected as a
+-- station); owners that disagree → OWNER_CONFLICT (also unowned).
 local OWNER_CONFLICT <const> = -2
 local function stationOwner(c : Engine.Component.Construction) : integer
 	local found = -1
@@ -224,7 +209,7 @@ local function constructionFull(d : BulkBulldozerDesc) : BulkBulldozerDesc
 		local c = comp(e, api.type.ComponentType.CONSTRUCTION) as Engine.Component.Construction
 		if c ~= nil then d.owner = stationOwner(c) end
 	end
-	-- A subconstruction goes with its parent construction (overpass_probe.script.tl:339-341).
+	-- A subconstruction goes with its parent construction.
 	if comp(e, api.type.ComponentType.SUBCONSTRUCTION) ~= nil then
 		local okS, parent = pcall(api.engine.system.streetConnectorSystem.getConstructionEntityForSubconstruction, e)
 		if okS and parent ~= nil and parent >= 0 and parent ~= e then d.parentConstruction = parent end

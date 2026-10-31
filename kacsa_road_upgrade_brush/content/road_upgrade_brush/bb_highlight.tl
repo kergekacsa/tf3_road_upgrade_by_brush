@@ -1,27 +1,23 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Bulk Bulldozer selection highlight (PLAN "Highlight", research §11). PURE: no api.* calls, so it
--- is unit-tested offline (tests/square_bulk_bulldozer/test_highlight.lua).
+-- Selection highlight. PURE: no api.* calls.
 --
 -- Two ways to show the selection in the world; MODE picks one or both:
---   "engine": the engine's own selection effect on ActionDescriptor.highlightedEntities. Its colour
---             comes from the Selector's selectionColor / selectionOutlineColor(1) (the only base
---             caller passes both together, line_util.tl:1157-1159, 1182, 1241-1243). Rev 1 set
---             those to transparent (Overpass pattern), which made the highlight invisible.
---   "lines":  our own red lines along every selected edge (Hermite curve cut into straight
---             pieces) and a small red circle on every selected construction's origin, drawn in
---             the SAME single EdgeRenderable as the ring (the engine asserts on more than one per
---             recipe, overpass_probe.script.tl:4517-4519). Capped at MAX_SEGMENTS pieces.
---   "both":   default. The engine tint is unverified for edges and constructions (base only
---             highlights vehicles with it), the lines are a verified EdgeRenderable shape.
+--   "engine": the engine's own selection effect on ActionDescriptor.highlightedEntities. Its colour comes from the
+--             Selector's selectionColor / selectionOutlineColor(1), which must be set together and must not be
+--             transparent.
+--   "lines":  our own red lines along every selected edge (Hermite curve cut into straight pieces) and a small red
+--             circle on every selected construction's origin, drawn in the SAME single EdgeRenderable as the ring
+--             (the engine asserts on more than one per recipe). Capped at MAX_SEGMENTS pieces.
+--   "both":   default. The engine tint may not show on edges and constructions (the base game only uses it for
+--             vehicles); the lines always show.
 
 local brush = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush.tl" as BulkBulldozerBrush
 
 local hl : BulkBulldozerHighlight = {}
 
 hl.MODE = "both"
--- Selector filter accepts only highlighted entities, so the engine's hover effect never lands on
--- an object the brush would not take (it uses the same colours as the highlight). false = accept
--- every existing entity (rev 1 behaviour).
+-- The Selector filter accepts only highlighted entities, so the engine's hover effect never lands on an object the
+-- brush would not take (it uses the same colours as the highlight). false = accept every existing entity.
 hl.HOVER_ONLY_HIGHLIGHTED = true
 -- Straight pieces for all overlay lines + construction markers together (one EdgeRenderable).
 hl.MAX_SEGMENTS = 1600
@@ -32,10 +28,8 @@ hl.MAX_PER_EDGE = 8
 hl.LINE_OFFSET_Z = 1.5
 hl.MARKER_RADIUS = 8
 
--- Base palette (base/content/gui/main/color_internal.lua:129,134; default_colors.gres.lua:53,59):
--- Error = fireEngineRed #CE2029 for the selection, Negative = lightCoral #F08080 for the hover
--- preview. The native bulldozer's red tint is engine-internal (its descriptor only takes circle
--- colours, builtin.d.tl:390-410), so the base palette's red is the closest match.
+-- Base palette: Error = fireEngineRed #CE2029 for the selection, Negative = lightCoral #F08080 for the hover
+-- preview. The native bulldozer's red tint is engine-internal, so the base palette's red is the closest match.
 local RED : {number} = { 206 / 255, 32 / 255, 41 / 255 }
 local CORAL : {number} = { 240 / 255, 128 / 255, 128 / 255 }
 
@@ -64,7 +58,7 @@ function hl.colors(phase : string) : BulkBulldozerHighlightColors
 	end
 	return {
 		fill = rgba(RED, 0.45),
-		outline = rgba(RED, 0.75),   -- base: outline at transparency.Low (selector_react_util.tl:95)
+		outline = rgba(RED, 0.75),
 		outline1 = rgba(RED, 1.0),
 		line = rgba(RED, 0.9),
 		lineWidth = 2.5,

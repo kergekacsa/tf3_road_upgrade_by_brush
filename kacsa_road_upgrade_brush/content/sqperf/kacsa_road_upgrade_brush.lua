@@ -1,8 +1,6 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
 -- SQPERF: cheap, always-shipped performance instrumentation for square_* mods.
--- Canonical source: tools/sqperf/sqperf.lua. Every mod ships its own copy at
--- content/sqperf/<modId>.lua, written by `make sqperf-sync` (tools/sqperf_sync.py); edit only the
--- canonical file. Docs: plans/sqperf/README.md. Report: `make perf` (tools/perf_report.py).
+-- Every mod ships its own copy at content/sqperf/<modId>.lua.
 --
 -- Plain Lua that runs in the game: pre-5.3 only (no //, bit ops, utf8, math.tointeger, goto).
 -- Counters live in this module's locals, one copy per Lua state. Nothing is saved, no command is
@@ -30,7 +28,7 @@
 -- created inside pcall; fallback os.clock (process CPU time, overstates on macOS while other
 -- threads are busy). Clock is safe in every GUI context, including the worker threads ("Main Pool
 -- N") that run react onStepTimer callbacks and hudIconScript functions/recipes, and getTime costs
--- ~0.07 us (docs/findings.md "Timers and threads in GUI contexts", 2026-10-10): time everything.
+-- ~0.07 us: time everything.
 -- Instruments created with timed = false never read any clock (counts only); kept for a context
 -- where a clock is unwanted, not needed for thread safety. This module only calls api.type.Clock,
 -- log.message, collectgarbage and api.engine.config.getModParams (gate), never a GUI-only API.
@@ -102,7 +100,7 @@ M.PARAM_KEY = "sqperf_log"
 
 --- The one debug gate rule, given a mod params table (getModParams() or runFn's allModParams): true when
 --- all[mod][key] is the 2nd value (values {"Off", "On"}; params reach scripts as 1-based value
---- indices, docs/findings.md) or when the master switch mod is active (all[MASTER_MOD] present).
+--- indices) or when the master switch mod is active (all[MASTER_MOD] present).
 --- key defaults to PARAM_KEY. Anything that is not a table: false. Never errors, allocates nothing.
 local function debugOn(all, mod, key)
 	if type(all) ~= "table" then return false end
@@ -140,7 +138,7 @@ end
 ---   first    ({string})          sections whose first calls make up the phase=first line
 ---   initMs   (number)            level 1 threshold: phase / phase=first lines below it are only
 ---                                logged while level 3 is on. Default INIT_LOG_MS
----   now      (function)          ms timer override (tests)
+---   now      (function)          ms timer override
 function M.new(opts)
 	opts = opts or {}
 	local self = setmetatable({}, Inst)

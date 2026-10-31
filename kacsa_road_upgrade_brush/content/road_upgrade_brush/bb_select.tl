@@ -1,18 +1,15 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Bulk Bulldozer selection rules (PLAN "Architecture": bb_select.tl). PURE: takes the plain
--- descriptors bb_gather copies out of the engine, so every rule is unit-tested offline
--- (tests/square_bulk_bulldozer/test_select.lua). No api.* calls here.
+-- Selection rules. PURE: takes the plain descriptors bb_gather copies out of the engine. No api.* calls here.
 --
--- Order: hard rules (PLAN "Never removed") always win over the toolbar filters.
+-- Order: hard rules always win over the toolbar filters.
 
 local sel : BulkBulldozerSelect = {}
 
 -- One command per segment, so the selection stops growing past the commands of one press. The highlight draws about
 -- 6 line pieces per road, so this stays within the overlay limit (bb_highlight MAX_SEGMENTS).
 sel.STROKE_CAP = 200
--- PLAN "What a stroke hits": a construction is hit when its origin (transf translation) is in
--- the circle. false = take every construction the octree returns for the circle (only right if
--- the octree tests bounding volumes; settle with TESTING §2).
+-- A construction is hit when its origin (transf translation) is in the circle. false = take every construction the
+-- octree returns for the circle (only right if the octree tests bounding volumes).
 sel.CONSTRUCTION_ORIGIN_ONLY = true
 
 sel.KINDS = { "road", "track", "station", "asset", "town_building", "industry", "other" }
@@ -44,7 +41,7 @@ local REASON_LABEL : {string : string} = {
 	gone = "gone",
 }
 
--- PLAN "Filters" defaults.
+-- The filters when the toolbar has not set them.
 function sel.defaultFilters() : BulkBulldozerFilters
 	return {
 		roads = true,
@@ -63,8 +60,7 @@ function sel.checkboxOn(v : number, dflt : boolean) : boolean
 	return dflt
 end
 
--- Toolbar sync (coordinator request 2026-10-07): the CheckBoxes shown and the filters used must
--- never disagree. One menu value → true (2 = ticked), false (1 = unticked), nil (unknown).
+-- Toolbar sync: the CheckBoxes shown and the filters used must never disagree. One menu value → true (2 = ticked), false (1 = unticked), nil (unknown).
 function sel.paramValue(v : number) : boolean
 	if v == 2 then return true end
 	if v == 1 then return false end
@@ -128,10 +124,9 @@ local function isOwned(owner : integer) : boolean
 	return owner ~= nil and owner >= 0
 end
 
--- User decision 2026-10-07 (PLAN "Filters"): one "Roads" kind for every street, owned or not.
--- Town roads and unowned player roads can't be told apart, and streets freed from a street
--- construction (e.g. a roundabout) have no PLAYER_OWNED (research §12). The hard rules in
--- sel.classify still keep out other players' streets, construction parts and industry roads.
+-- One "Roads" kind for every street, owned or not. Town roads and unowned player roads can't be told apart, and
+-- streets freed from a street construction (e.g. a roundabout) have no PLAYER_OWNED. The hard rules in sel.classify
+-- still keep out other players' streets, construction parts and industry roads.
 local function edgeKind(d : BulkBulldozerDesc) : BulkBulldozerKind
 	if d.isStreet then return "road" end
 	return isOwned(d.owner) and "track" or "other"
@@ -140,7 +135,7 @@ end
 local function constructionKind(d : BulkBulldozerDesc) : BulkBulldozerKind
 	if (d.industries or 0) > 0 then return "industry" end
 	if not isOwned(d.owner) then
-		-- Same test as overpass_probe.script.tl:334-349 (townBuildingConstruction).
+		-- A town building: town buildings, and no stations, depots, or frozen parts.
 		if (d.townBuildings or 0) > 0 and (d.stations or 0) == 0 and (d.depots or 0) == 0
 				and (d.frozen or 0) == 0 then
 			return "town_building"
@@ -158,7 +153,7 @@ function sel.classify(d : BulkBulldozerDesc, f : BulkBulldozerFilters, ctx : Bul
 		return { entity = d.entity, kind = kind, reason = reason, objects = nObjects }
 	end
 	local player = ctx ~= nil and ctx.player or -1
-	-- Hard rules (PLAN "Never removed"), most specific first.
+	-- Hard rules, most specific first.
 	if d.gone then return skip("gone") end
 	if isOwned(d.owner) and d.owner ~= player then return skip("foreign") end
 	if d.parentConstruction ~= nil and d.parentConstruction >= 0 then return skip("part") end
@@ -219,8 +214,7 @@ function sel.add(s : BulkBulldozerStroke, c : BulkBulldozerCandidate) : boolean
 	return true
 end
 
--- User request 2026-10-08: a Shift stroke takes entities back out of the selection. Removes every
--- kept entity of `entities` (unknown ones are ignored) and returns how many went. Skip records
+-- A Shift stroke takes entities back out of the selection. Removes every kept entity of `entities` (unknown ones are ignored) and returns how many went. Skip records
 -- stay; the cap note goes once the selection is below the cap again.
 function sel.remove(s : BulkBulldozerStroke, entities : {integer}) : integer
 	local gone : {integer : boolean} = {}

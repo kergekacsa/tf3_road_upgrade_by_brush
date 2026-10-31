@@ -1,6 +1,6 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Road upgrade brush: paint over roads, then press Upgrade (Road tools). Selection, brush, highlight and
--- toolbar come from the Bulk Bulldozer tool. The Upgrade button is not connected yet: bb_upgrade.tl sends no command.
+-- Road upgrade brush: paint over roads, then press Upgrade (Road tools). Selection, brush, highlight and toolbar come
+-- from the Bulk Bulldozer tool; bb_upgrade.tl upgrades the roads.
 --
 -- Wiring: brush_upgrade.res.lua → getDefinition below → ACTION_CUSTOM with the BrushUpgradeAction recipe. The
 -- construction menu mounts the recipe while the entry is selected and the recipe hands the world-layer body to
@@ -33,17 +33,15 @@ local KEY_RADIUS <const> = "brush_upgrade_radius"
 local KEY_UPGRADE <const> = "brush_upgrade_upgrade"
 local KEY_CLEAR <const> = "brush_upgrade_clear"
 local KEY_STATUS <const> = "brush_upgrade_status"
--- Toolbar groups (construction.tl:2024-2074: consecutive params with the same `group` and
--- hideLabel share one horizontal row; a named group gets a separator line before it).
+-- Toolbar groups: consecutive params with the same `group` and hideLabel share one horizontal row; a named group
+-- gets a separator line before it.
 local GROUP_ACTIONS <const> = "brush_upgrade_actions"
--- the status chip's group: its id is the class bulk_bulldozer.css.lua scopes its rules under, so the
--- chip reads as plain text, as Smart Lanes' info block (sl_tool.css.lua). Dashes: the stylesheet
--- parser reads class names as [%a%d-]+ only (docs/findings/gui.md "CSS class names")
+-- the status chip's group: its id is the class brush_upgrade.css.lua scopes its rules under, so the chip reads as
+-- plain text, as Smart Lanes' info block. Dashes: the stylesheet parser reads class names as [%a%d-]+ only
 local GROUP_INFO <const> = "sq-tool-info"
 
--- What the selection shows: the hover preview (nothing selected), a stroke being painted
--- (LMB held, adding), the selection waiting for "Bulldoze" (LMB released), or the
--- selection being removed.
+-- What the selection shows: the hover preview (nothing selected), a stroke being painted (LMB held, adding), the
+-- selection waiting for Upgrade (LMB released), or the selection being upgraded.
 local PHASE_IDLE <const> = "idle"
 local PHASE_PAINTING <const> = "painting"
 local PHASE_SELECTED <const> = "selected"
@@ -61,14 +59,13 @@ local CURSOR_EPS <const> = 0.25
 local MOVED_LOG_INTERVAL <const> = 0.5
 -- The hover preview drops its descriptor cache this often (seconds), so it never goes stale.
 local HOVER_CACHE_TTL <const> = 2.0
--- A sample slower than this is logged (seconds; PLAN Phase 4 target is 2 ms), at most once a second.
+-- A sample slower than this is logged (seconds), at most once a second.
 local SLOW_SAMPLE <const> = 0.004
--- Spike aid (PLAN Phase 1 "octree hit semantics", TESTING §2): the hover tooltip also shows the raw
--- octree counts for exactly radius r. Two extra native queries per hover sample. Off in Phase 4.
+-- Debug aid: the hover tooltip also shows the raw octree counts for exactly radius r. Two extra native queries per
+-- hover sample.
 local DEBUG_OCTREE <const> = false
--- Right click (research §12): only PressedOutside and Clicked of button 2 reach the Selector. A
--- Clicked this far (screen px, either axis) from its press is a camera drag, not a click: the
--- selection stays. Tune from the "right click: moved N px" log line.
+-- Right click: only PressedOutside and Clicked of button 2 reach the Selector. A Clicked this far (screen px, either
+-- axis) from its press is a camera drag, not a click: the selection stays.
 local RMB_CLICK_MAX_PX <const> = 16
 -- The world layer (actionFn) counts as closed once it stays unmounted this long (os.clock s). An
 -- unmount followed by a mount in the same frame (re-binding) is not a close.
@@ -226,12 +223,9 @@ local record ResultLine
 	sticky : boolean        -- shown until the next stroke, upgrade or clear, whatever is selected (the end of a run)
 end
 
--- Status chip text shared between the action recipe (writer) and the BulkBulldozerStatus recipe
--- in the toolbar (reader). Same module, same Lua state: the construction menu loads this file once
--- through util.useFn (construction_react_util.tl:2829, scripts/util.tl:5-27), and the Overpass
--- Builder shares file-level state between its recipe and its toolbar params the same way
--- (overpass_probe.script.tl:4123-4128 → 6125-6127). The EV_STATUS event carries the same text
--- in case the two ever run in different Lua states.
+-- Status chip text shared between the action recipe (writer) and the BulkBulldozerStatus recipe in the toolbar
+-- (reader). Same module, same Lua state: the construction menu loads this file once. The EV_STATUS event carries the
+-- same text in case the two ever run in different Lua states.
 local record StatusEvent
 	head : string
 	detail : string
@@ -314,7 +308,7 @@ local function terrainHeight(x : number, y : number) : number
 	return api.engine.terrain.getHeightAt(api.type.Vec2f.new(x, y))
 end
 
--- One EdgeRenderable edge per ring arc (shape from overpass_probe.script.tl:4532-4555).
+-- One EdgeRenderable edge per ring arc.
 local function ringEdges(cx : number, cy : number, r : number, color : Vec4f) : {Builtin.Type.EdgeRenderable.Edge}
 	local edges : {Builtin.Type.EdgeRenderable.Edge} = {}
 	local width = brush.ringWidth(r)
@@ -349,8 +343,7 @@ local function vec4(c : {number}) : Vec4f
 	return api.type.Vec4f.new(c[1], c[2], c[3], c[4])
 end
 
--- Selection overlay (bb_highlight "lines"): one straight EdgeRenderable piece, the Overpass
--- Straight shape (overpass_probe.script.tl:4831-4846).
+-- Selection overlay (bb_highlight "lines"): one straight EdgeRenderable piece.
 local function segmentEdge(sg : BulkBulldozerSegment, color : Vec4f, width : number) : Builtin.Type.EdgeRenderable.Edge
 	local dx, dy = sg.x1 - sg.x0, sg.y1 - sg.y0
 	local len = math.sqrt(dx * dx + dy * dy)
@@ -370,7 +363,7 @@ local function segmentEdge(sg : BulkBulldozerSegment, color : Vec4f, width : num
 	return viz
 end
 
--- A full circle on a construction's origin (the Overpass full-circle Arc, 4532-4555).
+-- A full circle on a construction's origin.
 local function markerEdge(x : number, y : number, color : Vec4f, width : number) : Builtin.Type.EdgeRenderable.Edge
 	local z = safeHeight(x, y)
 	local r = hl.MARKER_RADIUS
@@ -396,8 +389,7 @@ end
 local function takeSample(s : Selection, x : number, y : number, r : number, f : BulkBulldozerFilters) : boolean
 	local tPerf = perf:start()
 	local ok, res = pcall(gather.sample, x, y, r, f, s.ctx, s.cache)
-	-- Wall ms (SQPERF's Clock): res.seconds is os.clock, which reads 3-6x high under load
-	-- (docs/findings/gui.md "Timers and threads").
+	-- Wall ms (SQPERF's Clock): res.seconds is os.clock, which reads 3-6x high under load.
 	local ms = perf:stop("sample", tPerf)
 	if not ok then
 		logMsg("sample failed: " .. tostring(res))
@@ -467,7 +459,7 @@ local record Overlay
 	truncated : boolean   -- MAX_SEGMENTS reached; some pieces / edges left out
 end
 
--- Overlay pieces per entity, reused across rebuilds (PERF_REVIEW.md): the overlay is rebuilt on
+-- Overlay pieces per entity, reused across rebuilds: the overlay is rebuilt on
 -- every selection change (each brush sample that adds something, every hover change), and making
 -- up to MAX_SEGMENTS EdgeRenderable pieces from scratch each time is the costly part. An entity's
 -- pieces only depend on its descriptor (same gather cache), the phase colours and its piece count.
@@ -583,13 +575,11 @@ local function logStroke(what : string, s : Selection)
 		table.concat(sel.describe(s.stroke), " / ")))
 end
 
--- Underground view (user request 2026-10-25): with "Underground" on, the world layer shows what the
--- base bulldozer's Underground button shows: LayerConfig.undergroundMode plus the white screen
--- (construction_react_util.tl:501-551 getLayerConfig, 3992-3997 makeWhiteScreen). The menu's own
--- LayerConfig never applies to this entry: setActionFn replaces the menu's actionFn that renders it
--- (construction.tl:4418-4480), so the layer is a child of our ActionDescriptor, as the base custom
--- selector actions do (construction_react_util.tl:1408-1413). Built once per Lua state; nil where
--- the platform lacks a piece (then no underground view, the filter still selects tunnels).
+-- Underground view: with "Underground" on, the world layer shows what the base bulldozer's Underground button shows:
+-- LayerConfig.undergroundMode plus the white screen. The menu's own LayerConfig never applies to this entry:
+-- setActionFn replaces the menu's actionFn that renders it, so the layer is a child of our ActionDescriptor, as the
+-- base custom selector actions do. Built once per Lua state; nil where the platform lacks a piece (then no
+-- underground view, the filter still selects tunnels).
 local g_undergroundLayer : LayerConfig = nil
 local g_undergroundTried = false
 
@@ -768,7 +758,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		refSel:set(s)
 		refOverlay:set(nil)
 	end
-	-- A stroke being painted or a selection waiting for "Bulldoze": RMB / ESC clear it.
+	-- A stroke being painted or a selection waiting for Upgrade: RMB / ESC clear it.
 	local function hasPending() : boolean
 		local s = refSel:get()
 		return s ~= nil and (s.phase == PHASE_PAINTING or s.phase == PHASE_SELECTED)
@@ -798,10 +788,9 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		refLmbDown:set(false)
 		resetToIdle()
 	end
-	-- The tool was closed, switched or hidden (user feedback 2026-10-07): drop the selection, the
-	-- hover preview, the result line and the status chip, so reopening starts empty. A commit that
-	-- is running keeps going in the engine; its result is no longer shown. rerender = false when
-	-- called during a render or an unmount (no state updates there).
+	-- The tool was closed, switched or hidden: drop the selection, the hover preview, the result line and the status
+	-- chip, so reopening starts empty. A running commit is cancelled and ends after the road in progress; its result
+	-- is no longer shown. rerender = false when called during a render or an unmount (no state updates there).
 	local function resetAll(why : string, rerender : boolean)
 		local s = refSel:get()
 		if s ~= nil and (s.phase == PHASE_PAINTING or s.phase == PHASE_SELECTED) then
@@ -828,7 +817,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		if rerender then bump() end
 	end
 
-	-- Mount / unmount of the tool recipe (base pattern: construction_react_util.tl:1355-1364):
+	-- Mount / unmount of the tool recipe:
 	-- file-scope state (g_status) survives an unmount, so both ends reset it.
 	react.onMount(function()
 		resetStatus()
@@ -839,8 +828,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		pcall(function() logMsg(string.format("instance #%d unmounted", refInstance:get())) end)
 		pcall(resetAll, "tool closed", false)
 	end)
-	-- isActive dropped since the last render: clear at once (onStep may not run any more when the
-	-- menu is hidden, and the log of 2026-10-07 never showed "tool deactivated").
+	-- isActive dropped since the last render: clear at once (onStep may not run any more when the menu is hidden).
 	if refRenderActive:get() and not param.isActive then
 		pcall(resetAll, "tool closed", false)
 	end
@@ -914,8 +902,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		end
 	end
 
-	-- LMB released: the selection stays (highlighted) and waits for "Bulldoze"; the
-	-- next stroke adds to it. Nothing is removed here (PLAN "Interaction").
+	-- LMB released: the selection stays (highlighted) and waits for Upgrade; the next stroke adds to it. Nothing is
+	-- changed here.
 	local function finishStroke(s : Selection)
 		local what = s.erasing and "erase stroke" or "stroke"
 		s.erasing = false
@@ -936,7 +924,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		bump()
 	end
 
-	-- The toolbar button "Bulldoze" (onChangeFn → EV_UPGRADE).
+	-- The toolbar button "Upgrade" (onChangeFn → EV_UPGRADE).
 	local function upgradeSelection()
 		local s = refSel:get()
 		if s == nil or s.phase == PHASE_IDLE or sel.count(s.stroke) == 0 then
@@ -1108,10 +1096,9 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			logMsg("world layer unmounted")
 			resetAll("tool switched", true)
 		end
-		-- isActive stays true for every entry of the shown tab in mouse mode (construction.tl:313, 413:
-		-- the menu mounts each entry's recipe), so with another tool of Road → Tools selected (Smart
-		-- Lanes) the brush below would sample under the cursor every frame. Only the selected entry's
-		-- world layer is mounted (construction.tl:4489-4501).
+		-- isActive stays true for every entry of the shown tab in mouse mode (the menu mounts each entry's recipe), so
+		-- with another tool of Road → Tools selected (Smart Lanes) the brush below would sample under the cursor
+		-- every frame. Only the selected entry's world layer is mounted.
 		if not refLayerUp:get() then
 			if not g_noLayerLogged and g_diagLines < DIAG_EPISODE_LINES then
 				g_noLayerLogged = true
@@ -1153,7 +1140,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			bump()
 		end
 
-		-- Brush samples, throttled by the sample policy (PLAN "Batching / rate limit").
+		-- Brush samples, throttled by the sample policy.
 		local cur = cursorState:old()
 		local r = radiusState:old()
 		local now = os.clock()
@@ -1290,10 +1277,9 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 				finishStroke(s)
 			end
 		elseif isRmb and (e.type == T.Pressed or e.type == T.PressedOutside) then
-			-- RMB press: only remember where. In game (log 2026-10-07) RMB Pressed / Released never
-			-- arrive here, only PressedOutside (press) and Clicked (release): the press is taken
-			-- before the Selector (RMB is bound to IA_MENU_BACK / IA_BACK / IA_CLOSE_TOPMOST_WINDOW /
-			-- IA_CONSTRUCTION_ACTION_CANCEL, research §12). Pressed is kept in case it ever arrives.
+			-- RMB press: only remember where. RMB Pressed / Released never arrive here, only PressedOutside (press) and
+			-- Clicked (release): the press is taken before the Selector (RMB is bound to the menu's back and cancel
+			-- actions). Pressed is kept in case it arrives.
 			refRmbPress:set({ x = e.x, y = e.y })
 		elseif isRmb and (e.type == T.Clicked or e.type == T.Released) then
 			-- RMB release: clears the selection, painted or waiting (nothing is removed), unless the
@@ -1326,7 +1312,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		return consume
 	end
 
-	-- The cursor tooltip is minimal now: the selection lives in the toolbar status chip.
+	-- The cursor tooltip is minimal: the selection lives in the toolbar status chip.
 	local function tooltipText(s : Selection, r : number) : string
 		local lines : {string} = { string.format("r = %d m", math.floor(r)) }
 		if s ~= nil and s.phase == PHASE_PAINTING and s.erasing then
@@ -1355,10 +1341,9 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 	local actionFn = function() : TreeNodeId
 		local tWorld = perf:start()
 		local _ = versionState:old()   -- re-render on selection changes
-		-- World-layer lifecycle (base: construction_react_util.tl:1355-1364). The menu swaps the
-		-- action to another entry's (or its "default") when the tool is left (construction.tl:4489-4501),
-		-- which unmounts this layer. An unmount not followed by a mount within LAYER_GONE_SECONDS
-		-- clears the selection (here or in onStep), so a same-frame re-binding never does.
+		-- World-layer lifecycle. The menu swaps the action to another entry's (or its "default") when the tool is
+		-- left, which unmounts this layer. An unmount not followed by a mount within LAYER_GONE_SECONDS clears the
+		-- selection (here or in onStep), so a same-frame re-binding never does.
 		react.onMount(function()
 			pcall(function()
 				refLayerUp:set(true)
@@ -1399,8 +1384,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		for _, e in ipairs(highlighted) do hlSet[e] = true end
 		refHlSet:set(hlSet)
 
-		-- Selection highlight (bb_highlight, research §11). The engine colours highlightedEntities
-		-- (and the hovered entity) with the Selector selection colours; transparent ones hide it.
+		-- Selection highlight (bb_highlight). The engine colours highlightedEntities (and the hovered entity) with the
+		-- Selector selection colours; transparent ones hide it.
 		local hc = hl.colors(phase)
 		local selFill = api.type.Vec4f.new(0, 0, 0, 0)
 		local selOutline = api.type.Vec4f.new(0, 0, 0, 0)
@@ -1420,13 +1405,12 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 					if hl.HOVER_ONLY_HIGHLIGHTED then return refHlSet:get()[entity] == true end
 					return api.engine.entityExists(entity)
 				end,
-				-- Consume the click so no entity window opens (overpass_probe.script.tl:4405-4430).
+				-- Consume the click so no entity window opens.
 				onSelect = function(_e : Engine.Entity, _i : {integer}, _d : Gui.SelectionDetails) : boolean
 					return true
 				end,
 				onProcessMouseEvent = onMouse,
-				-- Rev 1 had these transparent (Overpass pattern, overpass_probe.script.tl:4500-4517),
-				-- which also hid highlightedEntities: the selection was invisible in game.
+				-- Not transparent: transparent colours hide highlightedEntities.
 				selectionColor = selFill,
 				selectionOutlineColor = selOutline,
 				selectionOutlineColor1 = selOutline1,
@@ -1478,9 +1462,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 				color = api.type.Vec4f.new(1, 0.7, 0.1, 0.8)
 			end
 			for _, v in ipairs(ringEdges(cur.x, cur.y, r, color)) do bag[#bag + 1] = v end
-			-- the base tooltip recipe, where this platform has it (PS5 report 2026-10-19, Smart Lanes;
-			-- docs/findings/gui.md "Base GUI modules differ by platform"); else no tooltip (the status chip
-			-- shows the same counts)
+			-- the base tooltip recipe, where this platform has it; else no tooltip (the status chip shows the same
+			-- counts)
 			if type((constructionUi as {string : any}).SimpleTooltipRecipe) == "function" then
 				children[#children + 1] = builtin.ActionTooltip{
 					recipe = constructionUi.SimpleTooltipRecipe,
@@ -1494,8 +1477,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			local layer = undergroundLayer(undergroundOn)
 			if layer ~= nil then children[#children + 1] = layer end
 		end
-		-- Only ONE EdgeRenderable per recipe: the engine asserts on more (overpass_probe.script.tl:4517-4519),
-		-- so the ring and the selection overlay share it.
+		-- Only ONE EdgeRenderable per recipe: the engine asserts on more, so the ring and the selection overlay share
+		-- it.
 		if #bag > 0 then
 			children[#children + 1] = builtin.EdgeRenderable{
 				edges = bag,
@@ -1519,19 +1502,16 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		return descriptor
 	end
 
-	-- Keep focus on the tool, as the base selector-based tools do (construction_react_util.tl:1325-1327).
-	-- These and the ESC hooks below only where this platform's react has them (PS5 report 2026-10-19,
-	-- Smart Lanes; docs/findings/gui.md "Base GUI modules differ by platform"); a platform check is
-	-- constant, so the hooks are the same every render.
+	-- Keep focus on the tool, as the base selector-based tools do. These and the ESC hooks below only where this
+	-- platform's react has them; a platform check is constant, so the hooks are the same every render.
 	local reactAny = react as {string : any}
 	if type(reactAny.setForceFocusable) == "function" then react.setForceFocusable(true) end
 	if type(reactAny.setRestrictMouseFocus) == "function" then react.setRestrictMouseFocus(true) end
 
 	if not param.isActive then return nil end
 	param.setActionFn(actionFn, "BrushUpgradeAction")
-	-- ESC: while something is selected it clears the selection (nothing removed). Otherwise, in mouse
-	-- mode, it falls through and closes the construction window (construction_react_util.tl:1437-1441;
-	-- useInputAction may be conditional, as the base does there).
+	-- ESC: while something is selected it clears the selection (nothing is changed). Otherwise, in mouse mode, it
+	-- falls through and closes the construction window (useInputAction may be conditional, as the base does there).
 	if (hasPending() or isCommitting()) and type(reactAny.useInputAction) == "function" and type(reactAny.iaHandler) == "function" then
 		react.useInputAction("IA_MENU_BACK", react.iaHandler(function()
 			logEsc("IA_MENU_BACK")
@@ -1541,12 +1521,10 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 	return nil
 end))
 
--- Toolbar status chip: the content of a disabled one-value Button (makeCompactButtonFn below).
--- A recipe as button content is base practice (cargofilter_window.tl:156, IconLabelIndicator →
--- BoxLayout, gui_react_util.tl:330-332); it returns a BoxLayout (memory: a recipe child must be a
--- layout) and re-renders itself, since the menu re-renders a param only when its value or
--- definition changes (construction.tl:1072-1092). Two TextViews, not a direct TextView child of
--- the button: the bar fixes those to 50 x 24 px (construction.css.lua:820-823).
+-- Toolbar status chip: the content of a disabled one-value Button (makeCompactButtonFn below). A recipe as button
+-- content is base practice; it returns a BoxLayout (a recipe child must be a layout) and re-renders itself, since the
+-- menu re-renders a param only when its value or definition changes. Two TextViews, not a direct TextView child of
+-- the button: the bar fixes those to 50 x 24 px.
 local record StatusParam end
 local StatusChip = react.RegisterRecipe("BrushUpgradeStatus", perf:wrap("status_render", function(_param : StatusParam) : TreeNodeId
 	local textState = react.useState({ head = g_status.head, detail = g_status.detail, severity = g_status.severity, hint = g_status.hint, tail = g_status.tail, tailSeverity = g_status.tailSeverity }) as ReactStateT<BulkBulldozerStatusText>
@@ -1593,8 +1571,8 @@ local StatusChip = react.RegisterRecipe("BrushUpgradeStatus", perf:wrap("status_
 		children = lines,
 	}
 end))
--- Button label wrapped in a BoxLayout, so the bar's 50 px TextView rule (construction.css.lua:820-823)
--- doesn't clip it; the BoxLayout is centred by builtin.css.lua:178-182.
+-- Button label wrapped in a BoxLayout, so the bar's 50 px TextView rule doesn't clip it; the BoxLayout is centred by
+-- the base style.
 local function buttonLabel(label : string) : TreeNodeId
 	return builtin.BoxLayout{
 		orientation = builtin.type.Orientation.Horizontal,
@@ -1625,7 +1603,7 @@ local ClearLabel = react.RegisterRecipe("BrushUpgradeClearLabel", function(_para
 		children = { builtin.TextView{ meta = brushStyle.meta("font-scale-body", "warning"), text = runState:old() and _("Cancel") or _("Clear") } },
 	}
 end)
--- UG erases the generic at this boundary (marketing_campaign_tool.script.tl:120-122).
+-- The game erases the generic type at this boundary.
 local makeCustomAction = function<P>(recipe : Recipe<ConstructionCustomActionParams<P>>, customParam? : P) : ConstructionCustomAction<any>
 	return { recipe = recipe as Recipe<ConstructionCustomActionParams<any>>, customParam = customParam }
 end
@@ -1660,7 +1638,7 @@ local Ret = {
 				yearFrom = 0,
 				yearTo = 0,
 				location = api.type.enum.ScriptParamLocation.Toolbar,
-				-- Slider with numbers: onChangeFn gets the number (overpass_probe.script.tl overpass_height).
+				-- Slider with numbers: onChangeFn gets the number.
 				onChangeFn = function(newValue : number, _api : ConstructionMenuParamsAPI, oldValue? : number)
 					if oldValue ~= nil and newValue == oldValue then return end
 					rememberApi(_api)
@@ -1671,11 +1649,8 @@ local Ret = {
 				checkEnabledFn = alwaysEnabled,
 			},
 			{
-				-- [Bulldoze] [Clear] (user request 2026-10-07): two one-value Buttons with hideLabel
-				-- in one `group` render side by side (construction.tl:2024-2074; same as the Overpass
-				-- Builder presets, overpass_probe.script.tl:5677-5715). Every click runs onChangeFn
-				-- (construction.tl changeParam calls it even when the value is unchanged; Overpass
-				-- "Build", overpass_probe.script.tl:6105-6130). No oldValue guard on purpose.
+				-- [Upgrade] [Clear]: two one-value Buttons with hideLabel in one `group` render side by side. Every click
+				-- runs onChangeFn, even when the value is unchanged. No oldValue guard on purpose.
 				key = KEY_UPGRADE,
 				name = _("Upgrade"),
 				tooltip = _("Upgrade every selected (highlighted) road. There is no undo."),
@@ -1687,7 +1662,7 @@ local Ret = {
 				yearFrom = 0,
 				yearTo = 0,
 				location = api.type.enum.ScriptParamLocation.Toolbar,
-				-- Label in a BoxLayout: unclipped (script_param_util.tl:403-405 uses this as the content).
+				-- Label in a BoxLayout: unclipped.
 				makeCompactButtonFn = function(_value : number) : TreeNodeId
 					return buttonLabel(_("Upgrade"))
 				end,
@@ -1719,11 +1694,9 @@ local Ret = {
 				checkEnabledFn = alwaysEnabled,
 			},
 			{
-				-- Status chip under the buttons: a one-value Button kept "Disabled" (not clickable;
-				-- the Overpass Builder shows its build errors as disabled Buttons,
-				-- overpass_probe.script.tl:6093-6098) whose content is the self-updating
-				-- BulkBulldozerStatus recipe. Its own group (GROUP_INFO): bulk_bulldozer.css.lua
-				-- turns the grey button into plain left-aligned text, the Smart Lanes info style.
+				-- Status chip under the buttons: a one-value Button kept "Disabled" (not clickable) whose content is the
+				-- self-updating BrushUpgradeStatus recipe. Its own group (GROUP_INFO): brush_upgrade.css.lua turns the
+				-- grey button into plain left-aligned text, the Smart Lanes info style.
 				key = KEY_STATUS,
 				name = _("Selection"),
 				tooltip = _("What is selected. Right-click or Clear empties the selection."),
@@ -1801,8 +1774,7 @@ local Ret = {
 			constructions = {},
 			categories = {},
 			params = params,
-			-- Order below the first year-gated entry so isActionActive(listIndex) matches
-			-- (overpass_probe.script.tl:6181-6217, research §1).
+			-- Order below the first year-gated entry so isActionActive(listIndex) matches.
 			menuCategory = {
 				categories = {
 					{ category = "roads_tools", order = 5 },

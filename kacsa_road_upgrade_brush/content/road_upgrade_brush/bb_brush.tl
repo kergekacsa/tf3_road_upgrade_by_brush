@@ -1,26 +1,23 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Bulk Bulldozer brush maths (PLAN "Architecture": bb_brush.tl). PURE: no api.* calls, so it is
--- unit-tested offline (tests/square_bulk_bulldozer/test_brush.lua). The terrain lookup is passed in.
--- Phase 2: the edge-touches-circle test (Hermite sampling), point-in-circle and the query margin.
+-- Brush geometry: the ring, the sample points, and the edge-touches-circle test (Hermite sampling), point-in-circle,
+-- and the query margin. PURE: no api.* calls; the terrain lookup is passed in.
 
 local brush : BulkBulldozerBrush = {}
 
--- PLAN "Radius": 12 steps, default 20 m, capped at 200 m to bound query cost and accidents.
+-- Twelve radius steps (metres), default 20, at most 200 to bound the query cost.
 brush.RADII = { 5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200 }
 brush.DEFAULT_RADIUS = 20
--- PLAN Phase 1: one EdgeRenderable edge per arc; an arc has one height pair (start/end), so
--- 48 pieces let the ring follow hills (research §3).
+-- One EdgeRenderable edge per arc; an arc has one height pair (start/end), so 48 arcs let the ring follow hills.
 brush.RING_ARCS = 48
--- PLAN "Batching / rate limit": sample when the cursor moved >= radius/4 or 100 ms passed.
+-- The brush samples when the cursor moved at least radius/4 or 100 ms passed.
 brush.SAMPLE_MIN_INTERVAL = 0.1
 brush.SAMPLE_MOVE_FRACTION = 0.25
--- PLAN "What a stroke hits": an edge is hit when its curve, sampled at 9 points, comes within
--- the radius of a brush sample (polyline distance, so a straight edge passing through is exact).
+-- An edge is hit when its curve, sampled at 9 points, comes within the radius of a brush sample (polyline distance,
+-- so a straight edge passing through is exact).
 brush.EDGE_SAMPLES = 9
--- The octree hit semantics are unknown until the in-game spike (PLAN Phase 1, TESTING §2): if it
--- tests the edge's position (not its geometry), an edge is only returned when that point is in the
--- query circle. Querying r + EDGE_MARGIN finds every edge up to 2 * EDGE_MARGIN long either way;
--- the exact touch test below then drops the extra hits. Tune down to 0 if the octree tests geometry.
+-- The octree may test an edge's position instead of its geometry, so an edge is only returned when that point is in
+-- the query circle. Querying r + EDGE_MARGIN finds every edge up to 2 * EDGE_MARGIN long either way; the exact touch
+-- test then drops the extra hits.
 brush.EDGE_MARGIN = 100
 -- Cost bound per octree query (a 300 m query over a dense city stays well under this).
 brush.SAMPLE_MAX_ENTITIES = 4000

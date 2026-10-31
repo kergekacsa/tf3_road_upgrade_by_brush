@@ -1,9 +1,7 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Bulk Bulldozer shared contract: the records the GUI recipe and the pure modules share.
--- Loaded as module "bulk_bulldozer.bb_types" (every content/**/*.d.tl; tools/tealrt.py def_modules).
+-- Shared contract: the records the GUI recipe and the pure modules share.
 -- Every global name is prefixed BulkBulldozer (globals are shared by all loaded mods).
--- Entities are plain integers here (Engine.Entity is `type Entity = integer`, engine.d.tl:13),
--- so the pure modules never touch engine types and are unit-testable with plain tables.
+-- Entities are plain integers here, so the pure modules never touch engine types.
 
 --- One piece of the brush ring: an arc of the circle with the terrain height at both ends.
 --- Angles in radians, counter-clockwise from +x; heights in metres (world z).
@@ -16,7 +14,7 @@ global record BulkBulldozerRingArc
 end
 
 --- An edge's centre line in plan view: the cubic Hermite curve of BaseEdge position0/1 and
---- tangent0/1 (engine.d.tl:112-115), z dropped.
+--- tangent0/1, z dropped.
 global record BulkBulldozerCurve
 	p0x : number
 	p0y : number
@@ -34,7 +32,7 @@ global record BulkBulldozerCurve
 	t1z : number
 end
 
---- The toolbar filters (PLAN "Filters"). true = that kind may be selected.
+--- The toolbar filters. true = that kind may be selected.
 global record BulkBulldozerFilters
 	roads : boolean          -- every street that is ours or has no PLAYER_OWNED (town roads,
 	                         -- roads freed from street constructions); never another player's
@@ -64,7 +62,7 @@ global record BulkBulldozerDesc
 	parentConstruction : integer -- edge: getConstructionEntityForEdge; construction: the owner of a
 	                             -- subconstruction; -1 when none
 	-- edge
-	isStreet : boolean           -- has BASE_EDGE_STREET (no BASE_EDGE_TRACK type exists, research §4)
+	isStreet : boolean           -- has BASE_EDGE_STREET
 	isTunnel : boolean           -- BaseEdge.type == TUNNEL
 	tramOnly : boolean           -- a street whose lanes carry no car, bus or truck (a stand-alone tram track)
 	industryRoad : boolean       -- a segment that goes with an industry (findSegmentsToDelete) or
@@ -84,7 +82,7 @@ global record BulkBulldozerDesc
 end
 
 global enum BulkBulldozerKind
-	"road"           -- a street, ours or unowned (town roads included; user decision 2026-10-07)
+	"road"           -- a street, ours or unowned (town roads included)
 	"track"          -- our track
 	"station"        -- our station or depot construction
 	"asset"          -- our other construction
@@ -106,7 +104,7 @@ global enum BulkBulldozerReason
 	"tram_only"      -- a stand-alone tram track (no lane for cars, buses or trucks)
 end
 
---- One classified hit. reason == nil means keep (will be bulldozed in Phase 3).
+--- One classified hit. reason == nil means keep (the road will be upgraded).
 global record BulkBulldozerCandidate
 	entity : integer
 	kind : BulkBulldozerKind
@@ -114,7 +112,7 @@ global record BulkBulldozerCandidate
 	objects : integer   -- edge objects that go with an edge (0 for constructions)
 end
 
---- The selection: every sample of every stroke since it was last cleared or bulldozed.
+--- The selection: every sample of every stroke since it was last cleared or upgraded.
 global record BulkBulldozerStroke
 	keep : {integer : BulkBulldozerCandidate}   -- entity → kept candidate
 	order : {integer}                           -- kept entities in the order they were added
@@ -127,7 +125,7 @@ end
 
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush.tl" as BulkBulldozerBrush
 global record BulkBulldozerBrush
-	RADII : {number}               -- toolbar slider steps in metres (PLAN "Radius")
+	RADII : {number}               -- toolbar slider steps in metres
 	DEFAULT_RADIUS : number
 	RING_ARCS : integer            -- arcs per ring (one EdgeRenderable edge each)
 	SAMPLE_MIN_INTERVAL : number   -- seconds; a sample is due at least this often while the cursor moves
@@ -165,7 +163,7 @@ end
 
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_select.tl" as BulkBulldozerSelect
 global record BulkBulldozerSelect
-	STROKE_CAP : integer               -- kept entities per selection (PLAN: 400)
+	STROKE_CAP : integer               -- kept entities per selection
 	CONSTRUCTION_ORIGIN_ONLY : boolean -- constructions hit only when their origin is in the circle
 	KINDS : {BulkBulldozerKind}        -- display order
 	REASONS : {BulkBulldozerReason}    -- display order
@@ -232,7 +230,7 @@ global record BulkBulldozerGather
 		ctx : BulkBulldozerContext, cache : BulkBulldozerGatherCache) : BulkBulldozerSampleResult
 end
 
--- Phase 3: commit path ------------------------------------------------------------------------
+-- Commit path ------------------------------------------------------------------------
 
 --- Split planner state (bb_batch). Items are entity ids; batches are sent one at a time.
 global record BulkBulldozerBatchPlan
@@ -245,9 +243,9 @@ global record BulkBulldozerBatchPlan
 end
 
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_batch.tl" as BulkBulldozerBatch
--- PURE: split-on-failure planner and orphan-node computation (PLAN "Commit and errors", "Orphan nodes").
+-- PURE: split-on-failure planner and orphan-node computation.
 global record BulkBulldozerBatch
-	MAX_COMMANDS : integer   -- hard cap of commands per stroke (PLAN: 48)
+	MAX_COMMANDS : integer   -- hard cap of commands per stroke
 
 	--- A plan that starts with all items in one batch.
 	newPlan : function(items : {integer}, cap? : integer) : BulkBulldozerBatchPlan
@@ -266,7 +264,7 @@ global record BulkBulldozerBatch
 		frozen : {integer : boolean}) : {integer}
 end
 
---- makeProposalData summary (bb_commit.preview).
+--- makeProposalData summary (bb_upgrade.preview).
 global record BulkBulldozerPreview
 	ok : boolean          -- every makeProposalData call returned data
 	cost : integer        -- sum of ProposalData.costs (sign as the engine reports it); nil if unknown
@@ -275,7 +273,7 @@ global record BulkBulldozerPreview
 	seconds : number      -- wall time (os.clock)
 end
 
---- Outcome of one commit (bb_commit.commit → onDone).
+--- Outcome of one commit (bb_upgrade.commit → onDone).
 global record BulkBulldozerCommitResult
 	requested : integer             -- entities handed to commit
 	removed : integer               -- entities in successful commands
@@ -339,7 +337,7 @@ global record BulkBulldozerCommit
 	RETRY_PASSES : integer
 end
 
--- Toolbar status (user request 2026-10-07: the selection shows in the panel, not the tooltip) ----
+-- Toolbar status -----------------------------------------------------------------------
 
 --- Two lines for the toolbar status chip: a headline and a detail line (both always set, so
 --- the chip keeps its height while the content changes).
@@ -381,7 +379,7 @@ global record BulkBulldozerStatus
 	width : function(s : string) : integer
 	--- Clip s to at most n display columns (status.width; UTF-8 safe), appending "..." when clipped.
 	clip : function(s : string, n : integer) : string
-	--- Translated display text of a skip reason / refusal (English text from bb_commit); unknown
+	--- Translated display text of a skip reason / refusal (English text from bb_upgrade); unknown
 	--- reasons (the game's own error messages) are returned unchanged.
 	reasonLabel : function(reason : string) : string
 	--- The chip text with nothing selected (translated).
@@ -394,7 +392,7 @@ global record BulkBulldozerStatus
 	oneLine : function(t : BulkBulldozerStatusText) : string
 end
 
--- Selection highlight (user report 2026-10-07: the selection was not visible in the world) -------
+-- Selection highlight ------------------------------------------------------------------
 
 --- Colours of one highlight state as plain rgba {r, g, b, a} in [0, 1].
 global record BulkBulldozerHighlightColors
