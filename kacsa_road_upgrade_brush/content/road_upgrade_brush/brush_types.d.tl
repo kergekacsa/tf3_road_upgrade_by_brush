@@ -23,7 +23,9 @@ global record BrushStyle
 end
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as ProposalProbe
 global record ProposalProbe
-	--- Logs the proposal of a construction action while the cursor is over a road (diagnostic).
+	--- Switch for all diagnostics of the mod (this probe and the diagnostic lines of the brush tool); false = off.
+	ENABLED : boolean
+	--- Logs the proposal of a construction action while the cursor is over a road (diagnostic; does nothing unless ENABLED).
 	install : function(params : Builtin.ConstructionActionParam)
 	--- One line about a segment of a proposal: edge type, road development lock, decorations, lanes.
 	segmentText : function(seg : Proposal.SegmentAndEntity) : string

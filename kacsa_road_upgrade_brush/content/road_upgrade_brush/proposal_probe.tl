@@ -5,6 +5,10 @@
 
 local probe : ProposalProbe = {}
 
+-- Switch for all diagnostics of the mod: the hover probe below, the "segment to send" line of the brush commit, and
+-- the instance, layer, and cursor lines of the brush tool. true turns them on.
+probe.ENABLED = false
+
 local MAX_LINES <const> = 60
 local MAX_IDS <const> = 12
 local MIN_INTERVAL <const> = 1.0
@@ -141,6 +145,7 @@ end
 
 -- Wraps getProposalStringsFn of the action, which the game calls with the proposal under the cursor.
 function probe.install(params : Builtin.ConstructionActionParam)
+	if not probe.ENABLED then return end
 	local original = params.getProposalStringsFn
 	installs = installs + 1
 	if installs <= MAX_TRACE then

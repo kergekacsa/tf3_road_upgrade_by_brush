@@ -22,6 +22,7 @@ local status = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_stat
 local hl = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_highlight.tl" as BulkBulldozerHighlight
 local brushOptions = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_options.tl" as BrushOptions
 local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as BrushStyle
+local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as ProposalProbe
 
 local PREFIX <const> = "[BrushUpgrade] "
 local EV_RADIUS <const> = "BrushUpgrade.radius"
@@ -162,8 +163,13 @@ local function logMsg(msg : string)
 	pcall(function() log.message(PREFIX .. msg) end)
 end
 
+-- Lines of the diagnostics (instances, world layer, cursor); written only when probe.ENABLED is true.
+local function diagMsg(msg : string)
+	if probe.ENABLED then logMsg(msg) end
+end
+
 -- Changes with every edit of the mod; the log line below shows which edit the game runs.
-local BUILD <const> = "2026-10-31 ar"
+local BUILD <const> = "2026-10-31 as"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -628,7 +634,7 @@ local NO_TERRAIN_MAX_LINES <const> = 12
 local g_noTerrainSince : number = nil
 local g_noTerrainLines = 0
 
--- Cursor diagnostic: after the tool is activated or its world layer is mounted again, the step logs the terrain
+-- Cursor diagnostic (only with probe.ENABLED): after the tool is activated or its world layer is mounted again, the step logs the terrain
 -- position under the cursor and the ring position every DIAG_INTERVAL seconds, at most DIAG_EPISODE_LINES lines per
 -- session. A ring that does not follow the pointer shows here whether the game gives a fixed position or the step
 -- does not run. The first step after the world layer is gone also logs once.
@@ -649,7 +655,7 @@ local g_layerOwnerSetParam : function(ConstructionCustomActionParams<BulkBulldoz
 local g_passLogged = false
 
 local function armDiagnostic()
-	g_diagArmed = true
+	g_diagArmed = probe.ENABLED
 	g_diagLines = 0
 end
 
@@ -682,7 +688,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 	if refInstance:get() == 0 then
 		g_instances = g_instances + 1
 		refInstance:set(g_instances)
-		logMsg(string.format("instance #%d created", g_instances))
+		diagMsg(string.format("instance #%d created", g_instances))
 	end
 	-- The next LMB release is ignored (it ends a press that RMB cleared or that came mid-commit).
 	local refSkipRelease = react.useRef(false) as ReactRefT<boolean>
@@ -821,11 +827,11 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 	-- file-scope state (g_status) survives an unmount, so both ends reset it.
 	react.onMount(function()
 		resetStatus()
-		logMsg(string.format("instance #%d mounted", refInstance:get()))
+		diagMsg(string.format("instance #%d mounted", refInstance:get()))
 	end)
 	react.onUnmount(function()
 		resetStatus()
-		pcall(function() logMsg(string.format("instance #%d unmounted", refInstance:get())) end)
+		pcall(function() diagMsg(string.format("instance #%d unmounted", refInstance:get())) end)
 		pcall(resetAll, "tool closed", false)
 	end)
 	-- isActive dropped since the last render: clear at once (onStep may not run any more when the menu is hidden).
@@ -1055,7 +1061,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			g_layerOwnerSetParam(prm)
 			if not g_passLogged then
 				g_passLogged = true
-				logMsg(string.format("instance #%d passes the tool state to instance #%d, which owns the world layer",
+				diagMsg(string.format("instance #%d passes the tool state to instance #%d, which owns the world layer",
 					refInstance:get(), g_layerOwnerId))
 			end
 			perf:stop("step", tStep)
@@ -1103,7 +1109,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			if not g_noLayerLogged and g_diagLines < DIAG_EPISODE_LINES then
 				g_noLayerLogged = true
 				g_diagLines = g_diagLines + 1
-				logMsg(string.format("cursor diagnostic: instance #%d is active but its world layer is not mounted, the ring does not follow the pointer", refInstance:get()))
+				diagMsg(string.format("cursor diagnostic: instance #%d is active but its world layer is not mounted, the ring does not follow the pointer", refInstance:get()))
 			end
 			publishIfChanged()
 			perf:stop("step", tStep)
@@ -1128,7 +1134,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			g_diagLines = g_diagLines + 1
 			local ring = cursorState:old()
 			local t = hasTerrain and api.gui.mouse.getTerrainPosition() or nil
-			logMsg(string.format("cursor diagnostic: instance #%d, terrain position %s, ring %s, radius %s", refInstance:get(),
+			diagMsg(string.format("cursor diagnostic: instance #%d, terrain position %s, ring %s, radius %s", refInstance:get(),
 				t ~= nil and string.format("%.1f/%.1f", t.x, t.y) or "none",
 				ring ~= nil and string.format("%.1f/%.1f", ring.x, ring.y) or "none", tostring(radiusState:old())))
 		end
@@ -1354,7 +1360,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 				end
 				local downAt = refLayerDownAt:get()
 				refLayerDownAt:set(nil)
-				logMsg(string.format("instance #%d: world layer mounted (unmounted %s s before)", refInstance:get(),
+				diagMsg(string.format("instance #%d: world layer mounted (unmounted %s s before)", refInstance:get(),
 					downAt ~= nil and string.format("%.2f", os.clock() - downAt) or "no"))
 				if downAt ~= nil and os.clock() - downAt >= LAYER_GONE_SECONDS then
 					logMsg("world layer mounted again")
@@ -1371,7 +1377,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 					g_layerOwnerId = 0
 					g_layerOwnerSetParam = nil
 				end
-				logMsg(string.format("instance #%d: world layer unmounted", refInstance:get()))
+				diagMsg(string.format("instance #%d: world layer unmounted", refInstance:get()))
 			end)
 		end)
 		local cur = cursorState:old()

@@ -46,4 +46,4 @@ A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts two street
 
 ## Log
 
-The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[BrushUpgrade]`. The log shows each command, the game's messages, and the game speed. The `[RUS probe]` lines come from a diagnostic hook that is still in the mod.
+The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[BrushUpgrade]`. The log shows each command, the game's messages, and the game speed. The diagnostic lines (`[RUS probe]` hover probe, tool instances, world layer, cursor) are off. To turn them on, set `probe.ENABLED = true` in `content/road_upgrade_brush/proposal_probe.tl`.

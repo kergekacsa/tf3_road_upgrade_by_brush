@@ -349,7 +349,7 @@ local function proposalOf(edge : integer, template : string, decorations : {{int
 			summary = summary .. ", " .. note
 			if not okE then unsafe = true end
 		end
-		if not segmentLogged and #p.proposal.addedSegments > 0 then
+		if probe.ENABLED and not segmentLogged and #p.proposal.addedSegments > 0 then
 			segmentLogged = true
 			summary = summary .. ", segment to send: " .. probe.segmentText(p.proposal.addedSegments[1])
 		end
