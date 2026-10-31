@@ -13,6 +13,32 @@ global record RubBrushOptions
 	extras : function(params : {string : number}) : RubExtras
 	--- Whether the toolbar choice "Remove buildings in the way" is on (also when the map has no value yet).
 	removeBuildings : function(params : {string : number}) : boolean
+	--- Whether the road type of a clone (an index in `config.roadTypes`) is one the toolbar offers (not a one-way type).
+	offers : function(clone : RubClone) : boolean
+	--- The translated name of the road type of a clone.
+	roadTypeName : function(clone : RubClone) : string
+	--- Sets the toolbar params of the menu to the settings of a clone. The result is false when a param could not be set.
+	apply : function(menu : ConstructionMenuParamsAPI, clone : RubClone) : boolean
+end
+
+--- The settings of one street, as the toolbar shows them.
+global record RubClone
+	roadType : integer      -- index in `config.roadTypes`
+	trees : boolean
+	barrier : boolean
+	busLane : boolean
+	tram : boolean
+	catenary : boolean
+	lock : string           -- "lock" or "keep"
+	editedLanes : boolean   -- the lanes match no combination of bus lane and tram track; those three are then off
+end
+
+-- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_clone.tl" as RubBrushClone
+global record RubBrushClone
+	--- The street at (x, y): the one whose lanes cover the point (the nearest centre line when several do); tunnels only with `underground`, other streets only without it. nil when there is none. The second result is a text for the log: how many streets were in range and the nearest one.
+	pick : function(x : number, y : number, underground : boolean) : integer, string
+	--- The settings of a street. nil when its street template is none of the road types of the tool, or it cannot be read.
+	read : function(edge : integer) : RubClone
 end
 
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as RubStyle

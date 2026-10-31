@@ -277,7 +277,7 @@ global record RubExtras
 	busLane : boolean
 	tram : boolean
 	catenary : boolean
-	lock : boolean
+	lock : string   -- "keep": the segments keep their lock; "lock"; "unlock"
 end
 
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_upgrade.tl" as RubCommit
@@ -297,6 +297,12 @@ global record RubCommit
 	abort : function()
 	--- One log line about a road: kind, template, edge objects, decorations, parcels.
 	describeRoad : function(edge : integer) : string
+	--- The test the commit uses to leave a road alone: whether a road already is what the upgrade to `template` with
+	--- `extras` would make of it (road type, trees, barriers, bus lane, tram track, catenary, lock).
+	matcher : function(template : string, extras : RubExtras) : function(edge : integer) : boolean
+	--- The bus lane, tram track and catenary that a road with the street template carries (lock: "lock" when the road is
+	--- locked, else "keep"). nil when the lanes of the road match none of the combinations, or the road cannot be read.
+	extrasOf : function(edge : integer, template : string) : RubExtras
 	--- The cost is unknown before the upgrade: makeProposalData rejects the proposal replaceSegment returns.
 	preview : function(edges : {integer}, template : string) : RubPreview
 	--- Re-checks the hard rules on fresh descriptors right before sending. Returns the roads that
@@ -405,6 +411,8 @@ global record RubHighlight
 	usesLines : function(mode : string) : boolean
 	--- "idle" (hover preview) → light coral; any other phase (the selection) → red.
 	colors : function(phase : string) : RubHighlightColors
+	--- The colours of a road that already is what the upgrade would make of it: the same phases, in blue.
+	sameColors : function(phase : string) : RubHighlightColors
 	--- Upper bound of the curve length in plan view (Bezier control polygon).
 	curveLength : function(c : RubCurve) : number
 	--- Pieces for an edge of this length: ceil(length / SEGMENT_LENGTH) in [1, MAX_PER_EDGE].

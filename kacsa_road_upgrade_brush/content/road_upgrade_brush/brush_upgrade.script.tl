@@ -22,6 +22,7 @@ local status = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_stat
 local hl = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_highlight.tl" as RubHighlight
 local brushOptions = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_options.tl" as RubBrushOptions
 local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as RubStyle
+local brushClone = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_clone.tl" as RubBrushClone
 local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as RubProposalProbe
 
 local PREFIX <const> = "[BrushUpgrade] "
@@ -37,6 +38,12 @@ local KEY_STATUS <const> = "brush_upgrade_status"
 -- Input actions of the game: the rotation keys of its construction tools (default keys M and N, rebindable in the game).
 local IA_RADIUS_GROW <const> = "constructOpt1"
 local IA_RADIUS_SHRINK <const> = "constructOpt2"
+-- Enter: upgrades a waiting selection, like the Upgrade button. The game binds Return and Keypad Enter to both actions.
+local IA_ENTER_NAV <const> = "IA_NAV_ACTIVATE"
+local IA_ENTER_TEXT <const> = "IA_TEXT_ACCEPT"
+-- Two Enter actions or two tool instances report the same key press; a second report this soon after is ignored (seconds).
+local ENTER_MIN_GAP <const> = 0.3
+local g_lastEnterAt : number = -ENTER_MIN_GAP
 -- Toolbar groups: consecutive params with the same `group` and hideLabel share one horizontal row; a named group
 -- gets a separator line before it.
 local GROUP_ACTIONS <const> = "brush_upgrade_actions"
@@ -71,6 +78,8 @@ local DEBUG_OCTREE <const> = false
 -- Right click: only PressedOutside and Clicked of button 2 reach the Selector. A Clicked this far (screen px, either
 -- axis) from its press is a camera drag, not a click: the selection stays.
 local RMB_CLICK_MAX_PX <const> = 16
+-- The same for the middle button, which copies the road under the pointer.
+local MMB_CLICK_MAX_PX <const> = 16
 -- The world layer (actionFn) counts as closed once it stays unmounted this long (os.clock s). An
 -- unmount followed by a mount in the same frame (re-binding) is not a close.
 local LAYER_GONE_SECONDS <const> = 0.25
@@ -171,7 +180,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-10-31 ba"
+local BUILD <const> = "2026-10-31 bf"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -454,6 +463,61 @@ local function strokeLists(st : RubStroke) : {integer}, {integer}
 	return edges, cons
 end
 
+local record SettingsKey
+	params : {string : number}
+	text : string
+end
+local g_settingsKey : SettingsKey = nil
+
+-- The settings that decide whether a road already is the target, as one text. g_toolParams is replaced, never changed
+-- in place, so the text is made again only for a new map.
+local function settingsKey() : string
+	if g_settingsKey == nil or g_settingsKey.params ~= g_toolParams then
+		local x = brushOptions.extras(g_toolParams)
+		g_settingsKey = {
+			params = g_toolParams,
+			text = string.format("%s/%s%s%s%s", tostring((brushOptions.template(g_toolParams))),
+				tostring(x.busLane), tostring(x.tram), tostring(x.catenary), tostring(x.lock)),
+		}
+	end
+	return g_settingsKey.text
+end
+
+local record SameRoads
+	key : string
+	set : {integer : boolean}
+end
+
+-- The roads of the stroke that already are what the upgrade would make of them. None while the settings are invalid.
+local function findSame(st : RubStroke) : {integer : boolean}
+	local set : {integer : boolean} = {}
+	local template = brushOptions.template(g_toolParams)
+	if template == nil then return set end
+	local isSame = commit.matcher(template, brushOptions.extras(g_toolParams))
+	local edges = strokeLists(st)
+	for _, e in ipairs(edges) do
+		if isSame(e) then set[e] = true end
+	end
+	return set
+end
+
+-- findSame, kept in ref until key changes.
+local function sameRoads(ref : ReactRefT<SameRoads>, st : RubStroke, key : string) : {integer : boolean}
+	local have = ref:get()
+	if have == nil or have.key ~= key then
+		local t = perf:start()
+		local ok, set = pcall(findSame, st)
+		if not ok then
+			logMsg("already-like-this check failed: " .. tostring(set))
+			set = {}
+		end
+		have = { key = key, set = set }
+		perf:stop("same_roads", t)
+		ref:set(have)
+	end
+	return have.set
+end
+
 -- The highlight overlay of one selection state, cached until the selection or phase changes.
 
 local record Overlay
@@ -485,10 +549,15 @@ local function pieceTable(pc : PieceCache, phase : string) : {integer : PieceEnt
 	return t
 end
 
-local function buildOverlay(s : Selection, phase : string, key : string, pc : PieceCache, budget : integer) : Overlay
+-- `same` holds the roads that already are the target; their pieces are blue.
+local function buildOverlay(s : Selection, phase : string, key : string, pc : PieceCache, budget : integer,
+		same : {integer : boolean}) : Overlay
 	local c = hl.colors(phase)
 	local color = vec4(c.line)
 	local cached = pieceTable(pc, phase)
+	local cs = hl.sameColors(phase)
+	local sameColor = vec4(cs.line)
+	local sameCached = pieceTable(pc, phase .. "/same")
 	local curves : {RubCurve} = {}
 	local curveOf : {integer} = {}
 	local points : {RubDesc} = {}
@@ -523,14 +592,16 @@ local function buildOverlay(s : Selection, phase : string, key : string, pc : Pi
 	if trunc then out.truncated = true end
 	for i = 1, fit do
 		local e = curveOf[i]
-		local pe = cached[e]
+		local isSame = same[e] == true
+		local store = isSame and sameCached or cached
+		local pe = store[e]
 		if pe == nil or pe.n ~= plan[i] then
 			pe = { n = plan[i], edges = {} }
 			for _, sg in ipairs(hl.curveSegments(curves[i], plan[i], safeHeight)) do
-				local v = segmentEdge(sg, color, c.lineWidth)
+				local v = segmentEdge(sg, isSame and sameColor or color, isSame and cs.lineWidth or c.lineWidth)
 				if v ~= nil then pe.edges[#pe.edges + 1] = v end
 			end
-			cached[e] = pe
+			store[e] = pe
 		end
 		for _, v in ipairs(pe.edges) do
 			out.edges[#out.edges + 1] = v
@@ -679,6 +750,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	local refLmbDown = react.useRef(false) as ReactRefT<boolean>
 	local refShift = react.useRef(false) as ReactRefT<boolean>      -- Shift held at the last step
 	local refRmbPress = react.useRef(nil) as ReactRefT<RmbPress>
+	local refMmbPress = react.useRef(nil) as ReactRefT<RmbPress>
 	local refRenderActive = react.useRef(false) as ReactRefT<boolean> -- isActive at the last render
 	local refLayerDownAt = react.useRef(nil) as ReactRefT<number>     -- os.clock() the world layer unmounted
 	local refLayerUp = react.useRef(false) as ReactRefT<boolean>      -- world layer mounted: this entry is the selected tool
@@ -703,6 +775,9 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	local refJob = react.useRef(0) as ReactRefT<integer>            -- id of the latest commit
 	local refResult = react.useRef(nil) as ReactRefT<ResultLine>    -- status chip result
 	local refStatusKey = react.useRef("") as ReactRefT<string>      -- last published status text
+	local refShownKey = react.useRef("") as ReactRefT<string>   -- settingsKey() at the last toolbar event
+	local refSame = react.useRef(nil) as ReactRefT<SameRoads>
+	local refHoverSame = react.useRef(nil) as ReactRefT<SameRoads>
 	local refOverlay = react.useRef(nil) as ReactRefT<Overlay>
 	local refPieces = react.useRef(nil) as ReactRefT<PieceCache>
 	local refHlSet = react.useRef({}) as ReactRefT<{integer : boolean}>  -- read by the Selector filter
@@ -863,6 +938,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		refLmbDown:set(false)
 		refSkipRelease:set(false)
 		refRmbPress:set(nil)
+		refMmbPress:set(nil)
 		refResult:set(nil)
 		refOverlay:set(nil)
 		refPieces:set(nil)
@@ -1008,6 +1084,20 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		startCommit(s, template, brushOptions.extras(g_toolParams), brushOptions.removeBuildings(g_toolParams))
 	end
 
+	-- Enter does what the Upgrade button does, for a selection that waits. Only the instance whose world layer is mounted acts.
+	local function upgradeOnEnter(action : string)
+		if not refLayerUp:get() or not refParam:get().isActive then return end
+		local s = refSel:get()
+		if s == nil or s.phase ~= PHASE_SELECTED then return end
+		local now = os.clock()
+		if now - g_lastEnterAt < ENTER_MIN_GAP then return end
+		g_lastEnterAt = now
+		logMsg("Enter (" .. action .. "): upgrade")
+		upgradeSelection()
+	end
+	react.useInputAction(IA_ENTER_NAV, react.iaHandler(function() upgradeOnEnter(IA_ENTER_NAV) end))
+	react.useInputAction(IA_ENTER_TEXT, react.iaHandler(function() upgradeOnEnter(IA_ENTER_TEXT) end))
+
 	react.onEvent(EV_RADIUS, function(_name : string, payload : any)
 		local m = (payload as RadiusEvent).meters
 		local r = brush.radiusFromParam(m)
@@ -1064,6 +1154,12 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		if s ~= nil and s.phase == PHASE_SELECTED and s.previewTemplate ~= (brushOptions.template(g_toolParams)) then
 			updatePreview(s)
 			bump()
+		end
+		-- A setting that decides which roads are blue changed: draw the waiting selection again.
+		local key = settingsKey()
+		if key ~= refShownKey:get() then
+			refShownKey:set(key)
+			if s ~= nil and s.phase == PHASE_SELECTED then bump() end
 		end
 	end)
 
@@ -1279,11 +1375,54 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		perf:stop("step", tStep)
 	end)
 
+	-- Middle click: the settings of the street under the cursor become the settings of the toolbar.
+	local function copyRoad()
+		local function say(head : string, detail : string, severity : string)
+			refResult:set({ text = { head = head, detail = detail, severity = severity }, untilAt = os.clock() + RESULT_SECONDS })
+			bump()
+		end
+		local cur = cursorState:old()
+		if cur == nil then
+			logMsg("copy: no cursor position")
+			say(_("Cannot copy this road"), _("No road under the cursor"), "warning")
+			return
+		end
+		local edge, note = brushClone.pick(cur.x, cur.y, filtersState:old().underground == true)
+		if edge == nil then
+			logMsg(string.format("copy: no street at %.1f/%.1f; %s", cur.x, cur.y, tostring(note)))
+			say(_("Cannot copy this road"), _("No road under the cursor"), "warning")
+			return
+		end
+		local c = brushClone.read(edge)
+		if c == nil then
+			logMsg(string.format("copy: edge %d is none of the road types; %s", edge, commit.describeRoad(edge)))
+			say(_("Cannot copy this road"), _("Not a road type of this tool"), "warning")
+			return
+		end
+		if not brushOptions.offers(c) then
+			logMsg(string.format("copy: edge %d is a one-way road type (%d)", edge, c.roadType))
+			say(_("Cannot copy this road"), _("One-way roads are not offered"), "warning")
+			return
+		end
+		local menu = menuParamsApi()
+		if menu == nil then
+			logMsg("copy: the menu's params API is not at hand")
+			say(_("Cannot copy this road"), _("Toolbar not reachable"), "warning")
+			return
+		end
+		local allSet = brushOptions.apply(menu, c)
+		logMsg(string.format("copy: edge %d, road type %d, trees %s, barrier %s, bus lane %s, tram %s, catenary %s, lock %s, edited lanes %s, toolbar %s; %s",
+			edge, c.roadType, tostring(c.trees), tostring(c.barrier), tostring(c.busLane), tostring(c.tram), tostring(c.catenary),
+			c.lock, tostring(c.editedLanes), allSet and "set" or "not fully set", tostring(note)))
+		say(_("Settings copied"), c.editedLanes and _("Lanes edited: bus lane/tram off") or brushOptions.roadTypeName(c), nil)
+	end
+
 	local onMouse = function(e : Gui.Mouse.Event) : boolean
 		local tMouse = perf:start()
 		local T = api.gui.mouse.Event.Type
 		local isLmb = e.button == 0
 		local isRmb = e.button == 2
+		local isMmb = e.button == 1
 		if e.type == T.Moved then
 			local ml = refMoved:get()
 			ml.count = ml.count + 1
@@ -1362,6 +1501,24 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 					eventTypeName(e.type), moved, p == nil and " (no press seen)" or ""))
 				cancelPending("right click")
 				consume = true
+			end
+		elseif isMmb and (e.type == T.Pressed or e.type == T.PressedOutside) then
+			-- MMB press: only remember where. The press is not consumed: a drag still turns the camera.
+			logMsg("middle " .. eventTypeName(e.type))
+			refMmbPress:set({ x = e.x, y = e.y })
+		elseif isMmb and (e.type == T.Clicked or e.type == T.Released) then
+			-- MMB release without a camera drag: copy the road under the pointer. Released and Clicked may both come; the
+			-- second finds no press.
+			local p = refMmbPress:get()
+			refMmbPress:set(nil)
+			local moved = 0
+			if p ~= nil and e.x ~= nil and e.y ~= nil then
+				moved = math.max(math.abs(e.x - p.x), math.abs(e.y - p.y))
+			end
+			local isClick = p ~= nil or e.type == T.Clicked
+			logMsg(string.format("middle %s: moved %d px%s", eventTypeName(e.type), moved, p == nil and " (no press seen)" or ""))
+			if isClick and moved <= MMB_CLICK_MAX_PX and not isCommitting() and not refLmbDown:get() then
+				copyRoad()
 			end
 		end
 		if debugLog() then
@@ -1443,6 +1600,17 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		local hlSet : {integer : boolean} = {}
 		for _, e in ipairs(highlighted) do hlSet[e] = true end
 		refHlSet:set(hlSet)
+		-- Roads that already are the target are blue lines only: the engine tint has one colour for all of its entities.
+		local sameSet : {integer : boolean} = {}
+		local tinted = highlighted
+		if s ~= nil and #highlighted > 0 then
+			local sameKey = tostring(versionState:old()) .. "/" .. tostring(#highlighted) .. "/" .. settingsKey()
+			sameSet = sameRoads(refSame, s.stroke, sameKey)
+			tinted = {}
+			for _, e in ipairs(highlighted) do
+				if not sameSet[e] then tinted[#tinted + 1] = e end
+			end
+		end
 
 		-- Selection highlight (bb_highlight). The engine colours highlightedEntities (and the hovered entity) with the
 		-- Selector selection colours; transparent ones hide it.
@@ -1480,7 +1648,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		-- Overlay lines / circles for the selection (cached per selection version + phase).
 		local overlayEdges : {Builtin.Type.EdgeRenderable.Edge} = {}
 		if hl.usesLines(hl.MODE) and s ~= nil and #highlighted > 0 then
-			local key = tostring(versionState:old()) .. "/" .. phase .. "/" .. tostring(#highlighted)
+			local key = tostring(versionState:old()) .. "/" .. phase .. "/" .. tostring(#highlighted) .. "/" .. settingsKey()
 			local ov = refOverlay:get()
 			if ov == nil or ov.key ~= key then
 				local pc = refPieces:get()
@@ -1489,7 +1657,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 					refPieces:set(pc)
 				end
 				local tOverlay = perf:start()
-				local ok, built = pcall(buildOverlay, s, phase, key, pc, hl.MAX_SEGMENTS)
+				local ok, built = pcall(buildOverlay, s, phase, key, pc, hl.MAX_SEGMENTS, sameSet)
 				perf:stop("overlay", tOverlay)
 				if ok then
 					ov = built
@@ -1511,7 +1679,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		if hl.usesLines(hl.MODE) and hover ~= nil and s ~= nil and s.phase == PHASE_SELECTED and sel.count(hover.stroke) > 0 then
 			local budget = hl.MAX_SEGMENTS - #overlayEdges
 			if budget > 0 then
-				local key = tostring(versionState:old()) .. "/hover/" .. tostring(budget)
+				local key = tostring(versionState:old()) .. "/hover/" .. tostring(budget) .. "/" .. settingsKey()
 				local hov = refHoverOverlay:get()
 				if hov == nil or hov.key ~= key then
 					local pc = refHoverPieces:get()
@@ -1519,7 +1687,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 						pc = { owner = hover.cache, byPhase = {} }
 						refHoverPieces:set(pc)
 					end
-					local ok, built = pcall(buildOverlay, hover, PHASE_IDLE, key, pc, budget)
+					local ok, built = pcall(buildOverlay, hover, PHASE_IDLE, key, pc, budget, sameRoads(refHoverSame, hover.stroke, key))
 					if ok then
 						hov = built
 					else
@@ -1579,7 +1747,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			tool = "brush-upgrade-tool",
 			crosshair = false,
 			terrainCirclePolicy = "Never",
-			highlightedEntities = highlighted,
+			highlightedEntities = tinted,
 			-- Back (ESC) clears the selection first; otherwise it leaves the tool.
 			onBack = function()
 				logEsc("back")
@@ -1742,7 +1910,7 @@ local Ret = {
 				-- runs onChangeFn, even when the value is unchanged.
 				key = KEY_UPGRADE,
 				name = _("Upgrade"),
-				tooltip = _("Upgrade every selected (highlighted) road. There is no undo."),
+				tooltip = _("Upgrade every selected (highlighted) road. Enter does the same. There is no undo."),
 				values = { _("Upgrade") },
 				defaultIndex = 1,
 				hideLabel = true,

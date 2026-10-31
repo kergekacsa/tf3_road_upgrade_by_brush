@@ -12,6 +12,8 @@ local function baseName(resName : string) : string
 	return name
 end
 
+templates.baseName = baseName
+
 local function lookup(name : string) : string
 	if byBaseName == nil then
 		byBaseName = {}

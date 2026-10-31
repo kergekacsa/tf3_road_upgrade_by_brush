@@ -28,6 +28,9 @@ hl.MARKER_RADIUS = 8
 -- RED is the base palette's Error colour (#CE2029). CORAL is its Negative colour (#F08080).
 local RED : {number} = { 206 / 255, 32 / 255, 41 / 255 }
 local CORAL : {number} = { 240 / 255, 128 / 255, 128 / 255 }
+-- BLUE marks a road that already is the target; SKY is its hover shade.
+local BLUE : {number} = { 30 / 255, 110 / 255, 230 / 255 }
+local SKY : {number} = { 120 / 255, 170 / 255, 240 / 255 }
 
 local function rgba(c : {number}, a : number) : {number}
 	return { c[1], c[2], c[3], a }
@@ -57,6 +60,26 @@ function hl.colors(phase : string) : RubHighlightColors
 		outline = rgba(RED, 0.75),
 		outline1 = rgba(RED, 1.0),
 		line = rgba(RED, 0.9),
+		lineWidth = 2.5,
+	}
+end
+
+-- Same phases as colors: "idle" is the hover preview (SKY), any other phase is the selection (BLUE).
+function hl.sameColors(phase : string) : RubHighlightColors
+	if phase == "idle" then
+		return {
+			fill = rgba(SKY, 0.25),
+			outline = rgba(SKY, 0.6),
+			outline1 = rgba(SKY, 0.85),
+			line = rgba(SKY, 0.6),
+			lineWidth = 1.5,
+		}
+	end
+	return {
+		fill = rgba(BLUE, 0.45),
+		outline = rgba(BLUE, 0.75),
+		outline1 = rgba(BLUE, 1.0),
+		line = rgba(BLUE, 0.9),
 		lineWidth = 2.5,
 	}
 end

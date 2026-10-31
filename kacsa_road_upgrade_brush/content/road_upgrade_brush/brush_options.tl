@@ -102,6 +102,63 @@ function brushOptions.removeBuildings(params : {string : number}) : boolean
 	return params == nil or params[REMOVE_BUILDINGS_KEY] ~= CHECKBOX_NO
 end
 
+function brushOptions.offers(clone : RubClone) : boolean
+	return clone.roadType <= offeredRoadTypes()
+end
+
+function brushOptions.roadTypeName(clone : RubClone) : string
+	return _(config.roadTypes[clone.roadType].name)
+end
+
+local CHECKBOX_YES <const> = 2
+local CATENARY_YES <const> = 1
+local CATENARY_NO <const> = 2
+local LOCK_KEEP <const> = 1
+local LOCK_LOCK <const> = 2
+local CATENARY_KEY <const> = "rub_catenary"
+
+local function setParam(menu : ConstructionMenuParamsAPI, key : string, value : integer) : boolean
+	local set = false
+	pcall(function()
+		local info = menu.getParamByKey(key)
+		if info ~= nil then
+			menu.changeParam(info.index, value)
+			set = true
+		end
+	end)
+	return set
+end
+
+local function checkBoxValue(on : boolean) : integer
+	return on and CHECKBOX_YES or CHECKBOX_NO
+end
+
+local record ParamStep
+	key : string
+	value : integer
+end
+
+-- Alley trees and noise barriers go off first and on last: the menu disables each of them while the other is on.
+function brushOptions.apply(menu : ConstructionMenuParamsAPI, clone : RubClone) : boolean
+	local steps : {ParamStep} = {
+		{ key = "rub_trees", value = CHECKBOX_NO },
+		{ key = "rub_barrier", value = CHECKBOX_NO },
+		{ key = ROAD_TYPE_KEY, value = clone.roadType },
+		{ key = "rub_tram", value = checkBoxValue(clone.tram) },
+		{ key = "rub_busLane", value = checkBoxValue(clone.busLane) },
+		{ key = "rub_trees", value = checkBoxValue(clone.trees) },
+		{ key = "rub_barrier", value = checkBoxValue(clone.barrier) },
+		{ key = "rub_lock", value = clone.lock == "lock" and LOCK_LOCK or LOCK_KEEP },
+	}
+	local allSet = true
+	for _, step in ipairs(steps) do
+		if not setParam(menu, step.key, step.value) then allSet = false end
+	end
+	-- The catenary param exists only from 1910 on, and only while the tram track is on.
+	if clone.tram then setParam(menu, CATENARY_KEY, clone.catenary and CATENARY_YES or CATENARY_NO) end
+	return allSet
+end
+
 function brushOptions.template(params : {string : number}) : string, string
 	local choices = options.fromParams(params or {})
 	if choices.underground then

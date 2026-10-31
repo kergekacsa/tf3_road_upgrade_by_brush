@@ -15,6 +15,8 @@ end
 
 global record RubTemplates
 	resolve : function(roadType : RubRoadType, suffix : string, year : integer) : string
+	--- The name of a street template without its path and ending: "::/infrastructure/street/town/town_new_large.street_template" is "town_new_large".
+	baseName : function(resName : string) : string
 end
 
 global record RubChoices
@@ -24,7 +26,7 @@ global record RubChoices
 	catenary : boolean
 	trees : boolean
 	barrier : boolean
-	lock : boolean
+	lock : string       -- "keep" | "lock" | "unlock"
 	symmetric : boolean
 	underground : boolean
 end

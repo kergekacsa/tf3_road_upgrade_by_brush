@@ -14,6 +14,9 @@ local Problems <const> : {RubRules.Problem} = { "treesAndBarrier", "treesCountry
 
 local DefaultRoadType <const> = "rub_type_town_medium"
 
+-- The values of the lock param, in the order of the combo box. A remembered 1 or 2 from the former check box reads as keep or lock.
+local LOCK_STATES <const> : {string} = { "keep", "lock", "unlock" }
+
 local function defaultRoadTypeIndex() : integer
 	for i, roadType in ipairs(config.roadTypes) do
 		if roadType.name == DefaultRoadType then
@@ -41,7 +44,7 @@ function options.fromParams(params : {string : number}) : RubChoices
 		catenary = tram and params["rub_catenary"] == 1,
 		trees = isYes(params, "rub_trees"),
 		barrier = isYes(params, "rub_barrier"),
-		lock = isYes(params, "rub_lock"),
+		lock = LOCK_STATES[math.floor(params["rub_lock"] or 1)] or LOCK_STATES[1],
 		symmetric = true,
 		underground = params["undergroundMode"] == 1,
 	}
@@ -131,7 +134,17 @@ function options.params() : {ConstructionMenuParam}
 			end
 			return isYes(params, "rub_trees") and "Disabled" or "Enabled"
 		end),
-		checkBox("rub_lock"),
+		{
+			key = "rub_lock",
+			name = _("rub_lock_name"),
+			tooltip = _("rub_lock_tooltip"),
+			values = { _("rub_lock_keep"), _("rub_lock_lock"), _("rub_lock_unlock") },
+			defaultIndex = 1,
+			uiType = api.type["enum"].ScriptParamType.ComboBox,
+			yearFrom = 0,
+			yearTo = 0,
+			resetOnMenuClose = false,
+		},
 	}
 	for __, problem in ipairs(Problems) do
 		result[#result + 1] = problemParam(problem)

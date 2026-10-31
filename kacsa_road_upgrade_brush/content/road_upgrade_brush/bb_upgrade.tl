@@ -159,14 +159,14 @@ local function outerVehicleLanes(lanes : {LaneConfig}) : {integer}
 end
 
 local function anyExtras(extras : RubExtras) : boolean
-	return extras.busLane or extras.tram or extras.lock
+	return extras.busLane or extras.tram or extras.lock ~= "keep"
 end
 
 local function extrasText(extras : RubExtras) : string
 	local on : {string} = {}
 	if extras.busLane then on[#on + 1] = "bus lane" end
 	if extras.tram then on[#on + 1] = extras.catenary and "tram with catenary" or "tram" end
-	if extras.lock then on[#on + 1] = "lock" end
+	if extras.lock ~= "keep" then on[#on + 1] = extras.lock end
 	return #on > 0 and table.concat(on, ", ") or "none"
 end
 
@@ -253,7 +253,7 @@ local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
 			end
 			comp.laneConfigs = lanes
 		end
-		if extras.lock then comp.roadDevelopmentLocked = true end
+		if extras.lock ~= "keep" then comp.roadDevelopmentLocked = extras.lock == "lock" end
 		segment.comp = comp
 	end
 	street.addedSegments = segments
@@ -277,11 +277,12 @@ local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
 			end
 		end
 	end
-	if extras.lock then
+	if extras.lock ~= "keep" then
+		local locked = extras.lock == "lock"
 		for s = 1, #readBack do
-			if not readBack[s].comp.roadDevelopmentLocked then
+			if (readBack[s].comp.roadDevelopmentLocked == true) ~= locked then
 				verified = false
-				notes[#notes + 1] = string.format("segment %d lock reads back false", s)
+				notes[#notes + 1] = string.format("segment %d lock reads back %s", s, tostring(not locked))
 			end
 		end
 	end
@@ -326,9 +327,9 @@ local function templateOuterModes(template : string, extras : RubExtras) : {inte
 end
 
 -- Whether a road already is what the template and the extras make of it: the outer driving lanes have exactly the
--- modes meant, and the lock is set when it is asked for. The lock is never taken off.
+-- modes meant, and the lock is as it is asked for ("keep" asks for nothing).
 local function carriesExtras(comp : Engine.Component.BaseEdge, template : string, extras : RubExtras) : boolean
-	if extras.lock and not comp.roadDevelopmentLocked then return false end
+	if extras.lock ~= "keep" and (comp.roadDevelopmentLocked == true) ~= (extras.lock == "lock") then return false end
 	local want, count = templateOuterModes(template, extras)
 	if want == nil then return true end
 	local lanes = comp.laneConfigs or {}
@@ -478,6 +479,35 @@ local function isAlreadyTarget(edge : integer, template : string, decorations : 
 	return ok and same == true
 end
 
+function upgrade.matcher(template : string, extras : RubExtras) : function(edge : integer) : boolean
+	local decorations = templateDecorations(template)
+	return function(edge : integer) : boolean
+		return isAlreadyTarget(edge, template, decorations, extras)
+	end
+end
+
+local TRAM_STATES : {string} = { "none", "tram", "catenary" }
+
+function upgrade.extrasOf(edge : integer, template : string) : RubExtras
+	local ok, found = pcall(function() : RubExtras
+		local comp = api.engine.getComponent(edge, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+		if comp == nil then return nil end
+		local lock = comp.roadDevelopmentLocked and "lock" or "keep"
+		for _, bus in ipairs({ false, true }) do
+			for _, tramState in ipairs(TRAM_STATES) do
+				local extras : RubExtras = { busLane = bus, tram = tramState ~= "none", catenary = tramState == "catenary", lock = "keep" }
+				if carriesExtras(comp, template, extras) then
+					extras.lock = lock
+					return extras
+				end
+			end
+		end
+		return nil
+	end)
+	if ok then return found end
+	return nil
+end
+
 -- Simulation speed (0 = paused) and number of simulation updates, for the log. The game works on the world
 -- changes of a command during its simulation updates, which do not run while the game is paused.
 local function simulationText() : string
@@ -573,7 +603,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		industryRoads : {integer : boolean}, onDone : function(RubCommitResult), logFn : function(string),
 		onRoad : function(integer, boolean, integer, integer, integer))
 	local t0 = os.clock()
-	extras = extras or { busLane = false, tram = false, catenary = false, lock = false }
+	extras = extras or { busLane = false, tram = false, catenary = false, lock = "keep" }
 	local logLine = logFn or function(_s : string) end
 	edges = edges or {}
 	local res : RubCommitResult = {
