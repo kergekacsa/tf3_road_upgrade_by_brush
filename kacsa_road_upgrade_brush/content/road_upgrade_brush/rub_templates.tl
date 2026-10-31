@@ -38,6 +38,8 @@ local function isAvailable(resName : string, year : integer) : boolean
 	return (from == 0 or year >= from) and (to == 0 or year < to)
 end
 
+templates.isAvailable = isAvailable
+
 function templates.resolve(roadType : RubRoadType, suffix : string, year : integer) : string
 	for _, base in ipairs(roadType.bases) do
 		local resName = lookup(base .. suffix)

@@ -23,7 +23,6 @@ local hl = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_highligh
 local brushOptions = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_options.tl" as RubBrushOptions
 local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as RubStyle
 local brushClone = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_clone.tl" as RubBrushClone
-local railProbe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rail_probe.tl" as RubRailProbe
 local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as RubProposalProbe
 
 local PREFIX <const> = "[BrushUpgrade] "
@@ -32,6 +31,7 @@ local EV_UPGRADE <const> = "BrushUpgrade.upgrade"
 local EV_SHOWN <const> = "BrushUpgrade.shown"
 local EV_CLEAR <const> = "BrushUpgrade.clear"
 local EV_STATUS <const> = "BrushUpgrade.status"
+local KEY_MODE <const> = "rub_mode"
 local KEY_RADIUS <const> = "brush_upgrade_radius"
 local KEY_UPGRADE <const> = "brush_upgrade_upgrade"
 local KEY_CLEAR <const> = "brush_upgrade_clear"
@@ -181,7 +181,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-10-31 bh"
+local BUILD <const> = "2026-10-31 bi"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -474,12 +474,15 @@ local g_settingsKey : SettingsKey = nil
 -- in place, so the text is made again only for a new map.
 local function settingsKey() : string
 	if g_settingsKey == nil or g_settingsKey.params ~= g_toolParams then
-		local x = brushOptions.extras(g_toolParams)
-		g_settingsKey = {
-			params = g_toolParams,
+		local text : string
+		if brushOptions.mode(g_toolParams) == "rail" then
+			text = brushOptions.railKey(g_toolParams)
+		else
+			local x = brushOptions.extras(g_toolParams)
 			text = string.format("%s/%s%s%s%s", tostring((brushOptions.template(g_toolParams))),
-				tostring(x.busLane), tostring(x.tram), tostring(x.catenary), tostring(x.lock)),
-		}
+				tostring(x.busLane), tostring(x.tram), tostring(x.catenary), tostring(x.lock))
+		end
+		g_settingsKey = { params = g_toolParams, text = text }
 	end
 	return g_settingsKey.text
 end
@@ -492,10 +495,19 @@ end
 -- The roads of the stroke that already are what the upgrade would make of them. None while the settings are invalid.
 local function findSame(st : RubStroke) : {integer : boolean}
 	local set : {integer : boolean} = {}
+	local edges = strokeLists(st)
+	if brushOptions.mode(g_toolParams) == "rail" then
+		local targeter = brushOptions.railTargeter(g_toolParams)
+		if targeter == nil then return set end
+		for _, e in ipairs(edges) do
+			local _target, hasIt = targeter(e)
+			if hasIt then set[e] = true end
+		end
+		return set
+	end
 	local template = brushOptions.template(g_toolParams)
 	if template == nil then return set end
 	local isSame = commit.matcher(template, brushOptions.extras(g_toolParams))
-	local edges = strokeLists(st)
 	for _, e in ipairs(edges) do
 		if isSame(e) then set[e] = true end
 	end
@@ -624,11 +636,17 @@ local function previewCost(s : Selection) : integer
 	return s.preview.cost
 end
 
+-- What the preview of a waiting selection depends on: the street template, or the rail choices.
+local function previewTarget() : string
+	if brushOptions.mode(g_toolParams) == "rail" then return brushOptions.railKey(g_toolParams) end
+	return (brushOptions.template(g_toolParams))
+end
+
 -- makeProposalData summary of the whole stroke.
 local function updatePreview(s : Selection)
 	local tPerf = perf:start()
 	local edges = strokeLists(s.stroke)
-	local template = brushOptions.template(g_toolParams)
+	local template = previewTarget()
 	local ok, pv = pcall(commit.preview, edges, template)
 	perf:stop("preview", tPerf)
 	if not ok then
@@ -777,6 +795,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	local refResult = react.useRef(nil) as ReactRefT<ResultLine>    -- status chip result
 	local refStatusKey = react.useRef("") as ReactRefT<string>      -- last published status text
 	local refShownKey = react.useRef("") as ReactRefT<string>   -- settingsKey() at the last toolbar event
+	local refMode = react.useRef("") as ReactRefT<string>       -- "road" or "rail" at the last toolbar event
 	local refSame = react.useRef(nil) as ReactRefT<SameRoads>
 	local refHoverSame = react.useRef(nil) as ReactRefT<SameRoads>
 	local refOverlay = react.useRef(nil) as ReactRefT<Overlay>
@@ -965,7 +984,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	end
 	refRenderActive:set(param.isActive == true)
 
-	local function startCommit(s : Selection, template : string, extras : RubExtras, removeBuildings : boolean)
+	local function startCommit(s : Selection, template : string, extras : RubExtras, removeBuildings : boolean, railTarget? : RubRailTarget)
 		local edges = strokeLists(s.stroke)
 		refResult:set(nil)
 		s.phase = PHASE_COMMITTING
@@ -1021,7 +1040,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		end
 		local tPerf = perf:start()
 		local ok, err = pcall(function() : string
-			commit.commit(edges, template, extras, removeBuildings, s.ctx, s.cache.industryRoads, onDone, logMsg, onRoad)
+			commit.commit(edges, template, extras, removeBuildings, s.ctx, s.cache.industryRoads, onDone, logMsg, onRoad, railTarget)
 			return nil
 		end)
 		perf:stop("commit", tPerf)
@@ -1060,7 +1079,8 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		local s = refSel:get()
 		if s == nil or s.phase == PHASE_IDLE or sel.count(s.stroke) == 0 then
 			logMsg("upgrade button: nothing selected")
-			refResult:set({ text = { head = _("Nothing selected"), detail = _("Paint over roads first"), severity = "warning" }, untilAt = os.clock() + RESULT_SECONDS })
+			local first = brushOptions.mode(g_toolParams) == "rail" and _("Paint over tracks first") or _("Paint over roads first")
+			refResult:set({ text = { head = _("Nothing selected"), detail = first, severity = "warning" }, untilAt = os.clock() + RESULT_SECONDS })
 			bump()
 			return
 		end
@@ -1073,6 +1093,18 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		if refLmbDown:get() then
 			refSkipRelease:set(true)
 			refLmbDown:set(false)
+		end
+		if brushOptions.mode(g_toolParams) == "rail" then
+			local targeter, railProblem = brushOptions.railTargeter(g_toolParams)
+			if targeter == nil then
+				logMsg("upgrade button: no track target (" .. tostring(railProblem) .. ")")
+				refResult:set({ text = { head = _("Cannot upgrade"), detail = railProblem, severity = "error" }, untilAt = os.clock() + RESULT_SECONDS })
+				bump()
+				return
+			end
+			logMsg("upgrade button: " .. tostring(sel.count(s.stroke)) .. " selected, " .. brushOptions.railKey(g_toolParams))
+			startCommit(s, nil, brushOptions.extras({}), false, targeter)
+			return
 		end
 		local template, problem = brushOptions.template(g_toolParams)
 		if template == nil then
@@ -1125,9 +1157,13 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			logMsg("clear button: nothing selected")
 		end
 	end)
-	-- The filters the selection uses: roads always, tunnels or the ground by the Underground button.
+	-- The filters the selection uses: roads in the Roads mode, tracks in the Rails mode, tunnels or the ground by the
+	-- Underground button.
 	syncFilters = function(why : string)
 		local f = sel.defaultFilters()
+		local railMode = brushOptions.mode(g_toolParams) == "rail"
+		f.roads = not railMode
+		f.tracks = railMode
 		-- The underground view and the tunnels follow the Underground button of the toolbar (key undergroundMode, 1 = Yes),
 		-- or the shortcut, until the button changes.
 		local button = g_toolParams["undergroundMode"] == 1
@@ -1149,10 +1185,15 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		local ev = payload as ShownEvent
 		if ev == nil then return end
 		if ev.params ~= nil then g_toolParams = ev.params end
+		-- The selection holds edges of one kind: a switch of the mode clears it.
+		local mode = brushOptions.mode(g_toolParams)
+		local oldMode = refMode:get()
+		refMode:set(mode)
+		if oldMode ~= "" and oldMode ~= mode and hasPending() then cancelPending("mode switch") end
 		syncFilters("toolbar shown")
 		-- A selection waiting for Upgrade shows the cost of the street template chosen now.
 		local s = refSel:get()
-		if s ~= nil and s.phase == PHASE_SELECTED and s.previewTemplate ~= (brushOptions.template(g_toolParams)) then
+		if s ~= nil and s.phase == PHASE_SELECTED and s.previewTemplate ~= previewTarget() then
 			updatePreview(s)
 			bump()
 		end
@@ -1196,7 +1237,6 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 
 	react.onStep(function()
 		commit.tick()
-		railProbe.tick()
 		local tStep = perf:start()
 		local prm = refParam:get()
 		-- The newest instance is the one the menu keeps up to date, but after other tools were used the menu may keep
@@ -1377,12 +1417,13 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		perf:stop("step", tStep)
 	end)
 
+	local function say(head : string, detail : string, severity : string)
+		refResult:set({ text = { head = head, detail = detail, severity = severity }, untilAt = os.clock() + RESULT_SECONDS })
+		bump()
+	end
+
 	-- Middle click: the settings of the street under the cursor become the settings of the toolbar.
 	local function copyRoad()
-		local function say(head : string, detail : string, severity : string)
-			refResult:set({ text = { head = head, detail = detail, severity = severity }, untilAt = os.clock() + RESULT_SECONDS })
-			bump()
-		end
 		local cur = cursorState:old()
 		if cur == nil then
 			logMsg("copy: no cursor position")
@@ -1392,11 +1433,8 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		local edge, note = brushClone.pick(cur.x, cur.y, filtersState:old().underground == true)
 		if edge == nil then
 			logMsg(string.format("copy: no street at %.1f/%.1f; %s", cur.x, cur.y, tostring(note)))
-			if railProbe.run(cur.x, cur.y, filtersState:old().underground == true, logMsg) then
-				say("Rail probe sent", "One track type change, see the log", "warning")
-				return
-			end
-			say(_("Cannot copy this road"), _("No road under the cursor"), "warning")
+			local isTrack = brushClone.pick(cur.x, cur.y, filtersState:old().underground == true, true) ~= nil
+			say(_("Cannot copy this road"), isTrack and _("That is a track: switch to Rails") or _("No road under the cursor"), "warning")
 			return
 		end
 		local c = brushClone.read(edge)
@@ -1421,6 +1459,45 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			edge, c.roadType, tostring(c.trees), tostring(c.barrier), tostring(c.busLane), tostring(c.tram), tostring(c.catenary),
 			c.lock, tostring(c.editedLanes), allSet and "set" or "not fully set", tostring(note)))
 		say(_("Settings copied"), c.editedLanes and _("Lanes edited: bus lane/tram off") or brushOptions.roadTypeName(c), nil)
+	end
+
+	-- Middle click in the Rails mode: the track type and the catenary of the track under the cursor become the settings of the toolbar.
+	local function copyTrack()
+		local cur = cursorState:old()
+		if cur == nil then
+			logMsg("copy: no cursor position")
+			say(_("Cannot copy this track"), _("No track under the cursor"), "warning")
+			return
+		end
+		local underground = filtersState:old().underground == true
+		local edge, note = brushClone.pick(cur.x, cur.y, underground, true)
+		if edge == nil then
+			logMsg(string.format("copy: no track at %.1f/%.1f; %s", cur.x, cur.y, tostring(note)))
+			local isRoad = brushClone.pick(cur.x, cur.y, underground) ~= nil
+			say(_("Cannot copy this track"), isRoad and _("That is a road: switch to Roads") or _("No track under the cursor"), "warning")
+			return
+		end
+		local c = brushClone.readTrack(edge)
+		if c == nil then
+			logMsg(string.format("copy: edge %d is none of the base track templates; %s", edge, commit.describeRoad(edge)))
+			say(_("Cannot copy this track"), _("Not a track type of this tool"), "warning")
+			return
+		end
+		local menu = menuParamsApi()
+		if menu == nil then
+			logMsg("copy: the menu's params API is not at hand")
+			say(_("Cannot copy this track"), _("Toolbar not reachable"), "warning")
+			return
+		end
+		local allSet = brushOptions.applyTrack(menu, c)
+		logMsg(string.format("copy: track edge %d, track type %d, catenary %s, toolbar %s; %s",
+			edge, c.trackType, tostring(c.catenary), allSet and "set" or "not fully set", tostring(note)))
+		local name = brushOptions.trackName(c)
+		say(_("Settings copied"), c.catenary and (name .. " + " .. _("Catenary")) or name, nil)
+	end
+
+	local function copyUnderPointer()
+		if brushOptions.mode(g_toolParams) == "rail" then copyTrack() else copyRoad() end
 	end
 
 	local onMouse = function(e : Gui.Mouse.Event) : boolean
@@ -1524,7 +1601,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			local isClick = p ~= nil or e.type == T.Clicked
 			logMsg(string.format("middle %s: moved %d px%s", eventTypeName(e.type), moved, p == nil and " (no press seen)" or ""))
 			if isClick and moved <= MMB_CLICK_MAX_PX and not isCommitting() and not refLmbDown:get() then
-				copyRoad()
+				copyUnderPointer()
 			end
 		end
 		if debugLog() then
@@ -1918,7 +1995,7 @@ local Ret = {
 				-- runs onChangeFn, even when the value is unchanged.
 				key = KEY_UPGRADE,
 				name = _("Upgrade"),
-				tooltip = _("Upgrade every selected (highlighted) road. Enter does the same. There is no undo."),
+				tooltip = _("Upgrade every selected (highlighted) road or track. Enter does the same. There is no undo."),
 				values = { _("Upgrade") },
 				defaultIndex = 1,
 				hideLabel = true,
@@ -1985,7 +2062,7 @@ local Ret = {
 			},
 		}
 		-- Road type, trees and barrier come right after the radius.
-		for i, p in ipairs(brushOptions.params(GROUP_INFO)) do
+		for i, p in ipairs(brushOptions.params(GROUP_INFO, isRailEntry)) do
 			table.insert(params, 1 + i, p)
 		end
 		for _, prm in ipairs(params) do
@@ -1999,15 +2076,16 @@ local Ret = {
 		-- handled where it is built).
 		for _, prm in ipairs(params) do
 			local last = g_toolParams[prm.key]
-			if last ~= nil and prm.key ~= KEY_RADIUS and #prm.values > 1 then
+			if last ~= nil and prm.key ~= KEY_RADIUS and prm.key ~= KEY_MODE and #prm.values > 1 then
 				prm.defaultIndex = math.max(1, math.min(#prm.values, math.floor(last)))
 			end
 		end
 		logMsg(string.format("toolbar built; remembered radius %s, options %s", tostring(g_radius), paramsToString(g_toolParams)))
-		-- Every param is placed in the toolbar, in this order: radius, underground, the road options, the status chip,
-		-- the Upgrade and Clear buttons. The menu shows the params of the default location in a second window.
+		-- Every param is placed in the toolbar, in this order: the mode, radius, underground, the road and rail options,
+		-- the status chip, the Upgrade and Clear buttons. The menu shows the params of the default location in a second window.
 
 		local function rank(key : string) : integer
+			if key == KEY_MODE then return 0 end
 			if key == KEY_RADIUS then return 1 end
 			if key == "undergroundMode" then return 2 end
 			if key == KEY_STATUS then return 5 end
@@ -2029,8 +2107,10 @@ local Ret = {
 		end
 		params = ordered		return {
 			resName = constructionDefinition,
-			name = isRailEntry and "Rail Upgrade Brush" or _("Road Upgrade Brush"),
-			description = _("Upgrade roads with a brush: paint over the roads to select them, then press \"Upgrade\". \"Clear\", right-click or Esc clears the selection. One-way road types are not offered."),
+			name = isRailEntry and _("Rail Upgrade Brush") or _("Road Upgrade Brush"),
+			description = isRailEntry
+				and _("Upgrade tracks with a brush: paint over the tracks to select them, then press \"Upgrade\". Right-click or Esc clears the selection. Only simple, standard and high-speed tracks are changed.")
+				or _("Upgrade roads with a brush: paint over the roads to select them, then press \"Upgrade\". \"Clear\", right-click or Esc clears the selection. One-way road types are not offered."),
 			icon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/brush_tool.tga" },
 			previewIcon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/brush_tool_preview.tga" },
 			availability = { yearFrom = 0, yearTo = 0 },

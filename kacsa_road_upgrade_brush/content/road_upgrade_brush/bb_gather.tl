@@ -93,6 +93,7 @@ local function edgeLight(e : integer, cache : RubGatherCache) : RubDesc
 	d.full = false
 	d.node0, d.node1 = be.node0, be.node1
 	d.isTunnel = be.type == api.type.enum.BaseEdgeType.TUNNEL
+	d.template = be.roadTemplate
 	if be.objects ~= nil then
 		for _, o in ipairs(be.objects) do
 			if o ~= nil and o[1] ~= nil then d.objects[#d.objects + 1] = o[1] end

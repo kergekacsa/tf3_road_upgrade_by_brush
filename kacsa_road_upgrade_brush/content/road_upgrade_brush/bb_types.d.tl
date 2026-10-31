@@ -56,6 +56,7 @@ global record RubDesc
 	                             -- subconstruction; -1 when none
 	isStreet : boolean           -- has BASE_EDGE_STREET
 	isTunnel : boolean           -- BaseEdge.type == TUNNEL
+	template : string            -- BaseEdge.roadTemplate
 	tramOnly : boolean           -- a street whose lanes carry no car, bus or truck (a stand-alone tram track)
 	industryRoad : boolean       -- a segment that goes with an industry (findSegmentsToDelete) or
 	                             -- ends on a node frozen in an industry construction
@@ -93,6 +94,7 @@ global enum RubReason
 	"underground"    -- tunnel edge with "Underground" off
 	"surface"        -- edge on the ground while the underground view is on
 	"tram_only"      -- a stand-alone tram track (no lane for cars, buses or trucks)
+	"track_type"     -- a track whose template is none of the six base track templates
 end
 
 --- reason == nil means keep.
@@ -270,6 +272,7 @@ global record RubCommitResult
 	cost : integer                  -- preflight cost (nil if unknown)
 	seconds : number                -- wall time from commit() to onDone (os.clock)
 	cancelled : boolean             -- stopped by cancel(): the roads not yet reached were left alone
+	rail : boolean                  -- the edges were tracks
 end
 
 --- The add-ons of Road Upgrade All in One that change the lanes or the lock of the new segments.
@@ -309,7 +312,7 @@ global record RubCommit
 	--- still pass, plus road → reason for the dropped ones. `industryRoads` carries the selection's
 	--- industry-road protection over (bb_gather cache).
 	assertHardRules : function(edges : {integer}, ctx : RubContext,
-		industryRoads : {integer : boolean}) : {integer}, {integer : string}
+		industryRoads : {integer : boolean}, kind? : RubKind) : {integer}, {integer : string}
 	--- Upgrades the roads to the street template with one command per road, one after the other. A road
 	--- that already is the target is left alone; a road whose command fails is tried again, twice, after the
 	--- others.
@@ -318,6 +321,7 @@ global record RubCommit
 	--- dropped by the hard rules; not ok when its command failed. It gets the road, ok, the number of roads done in this
 	--- pass, the number of roads in this pass, and the pass (0 = first, 1 and 2 = retries). At the start of a retry pass it
 	--- runs once with no road (edge nil) and 0 done.
+	--- With `railTarget` the edges are tracks: `template` is nil, and `railTarget` gives per track the template it gets and whether it has that template already (nil when the track gets none; it is then left alone). The hard rules then keep tracks, not roads.
 	--- With `removeBuildings` the commands also demolish the buildings that block a road; without it such a road is
 	--- skipped. Only one commit runs at a time: while one runs, a new commit sends nothing and onDone runs at once with
 	--- `refused` set and every road in `failed`. onDone runs once, possibly from a sendCommand callback. In the result, `removed` counts the upgraded
@@ -325,7 +329,8 @@ global record RubCommit
 	commit : function(edges : {integer}, template : string, extras : RubExtras, removeBuildings : boolean, ctx : RubContext,
 		industryRoads : {integer : boolean},
 		onDone : function(RubCommitResult), logFn : function(string),
-		onRoad : function(edge : integer, ok : boolean, finished : integer, total : integer, attempt : integer))
+		onRoad : function(edge : integer, ok : boolean, finished : integer, total : integer, attempt : integer),
+		railTarget? : RubRailTarget)
 	--- How many times the roads that failed are tried again.
 	RETRY_PASSES : integer
 end

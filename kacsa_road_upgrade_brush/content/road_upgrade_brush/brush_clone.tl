@@ -4,6 +4,7 @@ local brush = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush
 local commit = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_upgrade.tl" as RubCommit
 local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig
 local templates = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_templates.tl" as RubTemplates
+local rails = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_rails.tl" as RubRails
 
 local clone : RubBrushClone = {}
 
@@ -131,6 +132,14 @@ function clone.read(edge : integer) : RubClone
 		end
 	end
 	return nil
+end
+
+function clone.readTrack(edge : integer) : RubTrackClone
+	local be = readEdge(edge)
+	if be == nil then return nil end
+	local trackType, catenary = rails.parse(be.roadTemplate)
+	if trackType == nil then return nil end
+	return { trackType = trackType, catenary = catenary }
 end
 
 return clone

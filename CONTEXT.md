@@ -21,5 +21,9 @@ The Rails choice of what an upgrade does with the wiring: Keep leaves each track
 _Avoid_: Electrification
 
 **Track type**:
-A street template with `roadType = "TRACK"`: simple, standard or high speed, each with or without catenary.
+One of the three types the Rails mode offers: simple, standard or high speed. Each exists with and without catenary.
 _Avoid_: Rail type, rail template
+
+**Base track template**:
+One of the six street templates of the game that make up the track types. A track with any other template is never selected or changed.
+_Avoid_: Supported template, known track

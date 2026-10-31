@@ -73,6 +73,7 @@ local function reasonLabels() : {string : string}
 		["underground"] = _("underground"),
 		["on the ground"] = _("on the ground"),
 		["tram track"] = _("tram track"),
+		["other track type"] = _("other track type"),
 		["not enough money"] = _("not enough money"),
 		["nothing left to upgrade"] = _("nothing left to upgrade"),
 		["bus lane or lock could not be set"] = _("bus lane or lock could not be set"),
@@ -177,10 +178,10 @@ function status.resultLines(r : RubCommitResult) : RubStatusText
 	local failed = #(r.failed or {})
 	if r.cancelled then
 		local left = math.max(0, r.requested - r.removed - unchanged)
-		return text(string.format(_("Cancelled · %d updated"), r.removed), string.format(_("%d roads not done"), left), "warning")
+		return text(string.format(_("Cancelled · %d updated"), r.removed), string.format(r.rail and _("%d tracks not done") or _("%d roads not done"), left), "warning")
 	end
 	if r.removed == 0 and failed == 0 and r.skipped <= 0 and unchanged > 0 then
-		return text(_("Nothing to upgrade"), _("The roads are already like this"))
+		return text(_("Nothing to upgrade"), r.rail and _("The tracks are already like this") or _("The roads are already like this"))
 	end
 	local head = string.format(_("%d updated, %d failed"), r.removed, failed)
 	local parts : {string} = {}

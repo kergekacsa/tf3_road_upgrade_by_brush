@@ -3,6 +3,8 @@
 --
 -- Hard rules always win over the toolbar filters.
 
+local rails = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_rails.tl" as RubRails
+
 local sel : RubSelect = {}
 
 -- Maximum selected entities per stroke. The highlight draws about 6 line pieces per road and MUST stay within
@@ -13,7 +15,7 @@ sel.STROKE_CAP = 200
 sel.CONSTRUCTION_ORIGIN_ONLY = true
 
 sel.KINDS = { "road", "track", "station", "asset", "town_building", "industry", "other" }
-sel.REASONS = { "filtered", "underground", "surface", "tram_only", "industry", "hq", "part", "foreign", "not_player", "gone" }
+sel.REASONS = { "filtered", "underground", "surface", "tram_only", "track_type", "industry", "hq", "part", "foreign", "not_player", "gone" }
 
 -- Filter CheckBox order in the toolbar; RubFilters field names.
 sel.FILTER_KEYS = { "roads", "tracks", "stations", "assets", "townBuildings", "underground" }
@@ -33,6 +35,7 @@ local REASON_LABEL : {string : string} = {
 	underground = "underground",
 	surface = "on the ground",
 	tram_only = "tram track",
+	track_type = "other track type",
 	industry = "industry",
 	hq = "HQ",
 	part = "part of a construction",
@@ -156,6 +159,7 @@ function sel.classify(d : RubDesc, f : RubFilters, ctx : RubContext) : RubCandid
 	end
 	if kind == "other" then return skip("not_player") end
 	if d.isEdge and d.isStreet and d.tramOnly then return skip("tram_only") end
+	if d.isEdge and kind == "track" and rails.parse(d.template) == nil then return skip("track_type") end
 	if not filterAllows(kind, f) then return skip("filtered") end
 	if d.isEdge and d.isTunnel and not f.underground then return skip("underground") end
 	-- surface == false (underground view on): only tunnels may be selected.

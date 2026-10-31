@@ -17,7 +17,12 @@ global record RubTemplates
 	resolve : function(roadType : RubRoadType, suffix : string, year : integer) : string
 	--- The name of a street template without its path and ending: "::/infrastructure/street/town/town_new_large.street_template" is "town_new_large".
 	baseName : function(resName : string) : string
+	--- Whether the street template exists and is available in the year.
+	isAvailable : function(resName : string, year : integer) : boolean
 end
+
+--- Per track: the template an upgrade gives it, and whether it has that template already. nil when it gets none.
+global type RubRailTarget = function(edge : integer) : string, boolean
 
 global record RubChoices
 	roadType : integer

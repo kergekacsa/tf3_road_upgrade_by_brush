@@ -54,6 +54,7 @@ local REASON_TEXT : {string : string} = {
 	underground = "underground",
 	surface = "on the ground",
 	tram_only = "tram track",
+	track_type = "other track type",
 }
 
 -- Hard rules only: the toolbar filters do not apply here.
@@ -89,7 +90,8 @@ local function makeContext(removeBuildings : boolean) : Context
 end
 
 function upgrade.assertHardRules(edges : {integer}, ctx : RubContext,
-		industryRoads : {integer : boolean}) : {integer}, {integer : string}
+		industryRoads : {integer : boolean}, kind? : RubKind) : {integer}, {integer : string}
+	local wanted : RubKind = kind or "road"
 	local cache = gather.newCache()
 	for k, v in pairs(industryRoads or {}) do if v then cache.industryRoads[k] = true end end
 	local passed : {integer} = {}
@@ -101,7 +103,7 @@ function upgrade.assertHardRules(edges : {integer}, ctx : RubContext,
 			local d = gather.describeEdge(e, cache)
 			if cache.industryRoads[e] then d.industryRoad = true end
 			local c = sel.classify(d, ALL_FILTERS, ctx)
-			if c.reason == nil and c.kind == "road" then
+			if c.reason == nil and c.kind == wanted then
 				passed[#passed + 1] = e
 			else
 				dropped[e] = c.reason or "filtered"
@@ -351,6 +353,13 @@ local function proposalOf(edge : integer, template : string, decorations : {{int
 		summary = string.format("+%d/-%d segments, +%d/-%d nodes, %d edge objects, toRemove %d, toAdd %d",
 			#street.addedSegments, #street.removedSegments, #street.addedNodes, #street.removedNodes,
 			#street.edgeObjectsToAdd, #(p.toRemove or {}), #(p.toAdd or {}))
+		pcall(function() : string
+			local old = api.engine.getComponent(edge, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+			local oldObjects = #(old.objects or {})
+			local newObjects = #(street.addedSegments[1].comp.objects or {})
+			summary = summary .. string.format(", edge objects %d -> %d%s", oldObjects, newObjects, newObjects < oldObjects and " (OBJECTS LOST)" or "")
+			return nil
+		end)
 		if #decorations > 0 then
 			local before = decorationCount(p)
 			applyDecorations(p, decorations)
@@ -601,14 +610,14 @@ end
 
 function upgrade.commit(edges : {integer}, template : string, extras : RubExtras, removeBuildings : boolean, ctx : RubContext,
 		industryRoads : {integer : boolean}, onDone : function(RubCommitResult), logFn : function(string),
-		onRoad : function(integer, boolean, integer, integer, integer))
+		onRoad : function(integer, boolean, integer, integer, integer), railTarget? : RubRailTarget)
 	local t0 = os.clock()
 	extras = extras or { busLane = false, tram = false, catenary = false, lock = "keep" }
 	local logLine = logFn or function(_s : string) end
 	edges = edges or {}
 	local res : RubCommitResult = {
 		requested = #edges, removed = 0, unchanged = 0, failed = {}, skipped = 0, reasons = {}, commands = 0,
-		refused = nil, cost = nil, seconds = 0,
+		refused = nil, cost = nil, seconds = 0, rail = railTarget ~= nil,
 	}
 	if running ~= nil then
 		-- The roads stay selected: a refusal reports them as failed.
@@ -700,13 +709,14 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		if n > 0 then logLine(string.format("hard-rule recheck (%s) dropped %d", where, n)) end
 	end
 
-	if template == nil then
+	if template == nil and railTarget == nil then
 		res.refused = "no valid road type"
 		finish()
 		return
 	end
 
-	local queue, dropped = upgrade.assertHardRules(edges, ctx, industryRoads)
+	local kind : RubKind = railTarget ~= nil and "track" or "road"
+	local queue, dropped = upgrade.assertHardRules(edges, ctx, industryRoads, kind)
 	skipDropped(dropped, "before send")
 	if #queue == 0 then
 		res.refused = "nothing left to upgrade"
@@ -719,9 +729,10 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		for i = 1, upgrade.MAX_COMMANDS do limited[i] = queue[i] end
 		queue = limited
 	end
-	local decorations = templateDecorations(template)
-	logLine(string.format("upgrade: %d roads, template %s, extras: %s, %d default decorations, remove buildings %s, %s",
-		#queue, template, extrasText(extras), #decorations, tostring(removeBuildings), simulationText()))
+	local decorations : {{integer, boolean}} = template ~= nil and templateDecorations(template) or {}
+	logLine(string.format("upgrade: %d %s, template %s, extras: %s, %d default decorations, remove buildings %s, %s",
+		#queue, railTarget ~= nil and "tracks" or "roads", template or "per track", extrasText(extras), #decorations,
+		tostring(removeBuildings), simulationText()))
 
 	local failed : {integer} = {}
 	local failedReason : {integer : string} = {}
@@ -743,14 +754,28 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	-- One road: nothing for a road that already is the target; else its command, sent while the game is paused.
 	-- `done` runs when the road is finished, from the command callback when a command was sent.
 	local function upgradeRoad(e : integer, attempt : integer, done : function())
-		if isAlreadyTarget(e, template, decorations, extras) then
+		local target = template
+		local same : boolean
+		if railTarget ~= nil then
+			target, same = railTarget(e)
+			if target == nil then
+				skip(REASON_TEXT.track_type)
+				logLine(string.format("edge %d: no target template for this track, left alone", e))
+				report(e, true)
+				done()
+				return
+			end
+		else
+			same = isAlreadyTarget(e, target, decorations, extras)
+		end
+		if same then
 			res.unchanged = res.unchanged + 1
 			logLine(string.format("edge %d: already the target, left alone", e))
 			report(e, true)
 			done()
 			return
 		end
-		local passed, dr = upgrade.assertHardRules({ e }, ctx, industryRoads)
+		local passed, dr = upgrade.assertHardRules({ e }, ctx, industryRoads, kind)
 		if #passed == 0 then
 			skipDropped(dr, "before send")
 			done()
@@ -777,7 +802,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			local force = false
 			-- The game calls this from its own thread: an error in the preparation fails the road, not the whole run.
 			local okP, errP = pcall(function() : string
-				p, summary, why = proposalOf(e, template, decorations, extras)
+				p, summary, why = proposalOf(e, target, decorations, extras)
 				if p == nil then return nil end
 				context = makeContext(removeBuildings)
 				local blockers = removeBuildings and attempt > 0 and assetBlockers[e] or nil
