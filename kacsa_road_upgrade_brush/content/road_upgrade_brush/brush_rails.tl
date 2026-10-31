@@ -6,7 +6,6 @@ local templates = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_
 local rails : RubRails = {}
 
 rails.TYPES = { "simple", "standard", "high_speed" }
-rails.STATES = { "keep", "add", "remove" }
 
 local PATH <const> = "infrastructure/track/"
 local CATENARY_SUFFIX <const> = "_catenary"
@@ -34,10 +33,17 @@ function rails.parse(resName : string) : integer, boolean
 	return nil, false
 end
 
-function rails.problem(typeIndex : integer, state : string, year : integer) : string
-	if not templates.isAvailable(rails.template(typeIndex, false), year) then return "trackYear" end
-	if state == "add" and not templates.isAvailable(rails.template(typeIndex, true), year) then return "catenaryYear" end
-	return nil
+-- The number of track types the game offers in the year, counted from the first.
+function rails.offeredTypes(year : integer) : integer
+	local count = 0
+	while count < #rails.TYPES and templates.isAvailable(rails.template(count + 1, false), year) do
+		count = count + 1
+	end
+	return count
+end
+
+function rails.hasCatenary(typeIndex : integer, year : integer) : boolean
+	return templates.isAvailable(rails.template(typeIndex, true), year)
 end
 
 -- The target template of a track and whether the track has it already. nil when the track has no base template or the

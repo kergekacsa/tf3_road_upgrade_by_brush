@@ -10,8 +10,8 @@ global record RubBrushOptions
 	mode : function(params : {string : number}) : string
 	--- The rail choices of a toolbar params map as one text.
 	railKey : function(params : {string : number}) : string
-	--- The per-track target of the rail choices, or nil and the text of the problem (a track type that is not available yet).
-	railTargeter : function(params : {string : number}) : RubRailTarget, string
+	--- The per-track target of the rail choices.
+	railTargeter : function(params : {string : number}) : RubRailTarget
 	--- The name the game gives the track type of a clone.
 	trackName : function(clone : RubTrackClone) : string
 	--- Sets the track type and the catenary state of the menu to a track's. The result is false when a param could not be set.
@@ -63,14 +63,14 @@ end
 global record RubRails
 	--- The base track types in the order of the toolbar: "simple", "standard", "high_speed".
 	TYPES : {string}
-	--- What an upgrade does with the catenary of a track: "keep", "add", "remove".
-	STATES : {string}
 	--- The street template of a base track type, with or without catenary.
 	template : function(typeIndex : integer, catenary : boolean) : string
 	--- The type (an index in TYPES) and the catenary of a base track template. nil when the template is none of the six.
 	parse : function(resName : string) : integer, boolean
-	--- "trackYear" when the type is not available in the year, "catenaryYear" when Add is chosen and the catenary is not. nil when the choice is valid.
-	problem : function(typeIndex : integer, state : string, year : integer) : string
+	--- The number of track types offered in the year, counted from the first.
+	offeredTypes : function(year : integer) : integer
+	--- Whether the game offers the catenary twin of a track type in the year.
+	hasCatenary : function(typeIndex : integer, year : integer) : boolean
 	--- Per track: the template the upgrade gives it, and whether it has that template already. nil when the track has no base template or the target is not available.
 	targeter : function(typeIndex : integer, state : string, year : integer) : RubRailTarget
 	--- The name the game gives the plain template of a type.

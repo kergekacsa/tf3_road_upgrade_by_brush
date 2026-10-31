@@ -181,7 +181,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-10-31 bi"
+local BUILD <const> = "2026-10-31 bl"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -498,7 +498,6 @@ local function findSame(st : RubStroke) : {integer : boolean}
 	local edges = strokeLists(st)
 	if brushOptions.mode(g_toolParams) == "rail" then
 		local targeter = brushOptions.railTargeter(g_toolParams)
-		if targeter == nil then return set end
 		for _, e in ipairs(edges) do
 			local _target, hasIt = targeter(e)
 			if hasIt then set[e] = true end
@@ -1095,13 +1094,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			refLmbDown:set(false)
 		end
 		if brushOptions.mode(g_toolParams) == "rail" then
-			local targeter, railProblem = brushOptions.railTargeter(g_toolParams)
-			if targeter == nil then
-				logMsg("upgrade button: no track target (" .. tostring(railProblem) .. ")")
-				refResult:set({ text = { head = _("Cannot upgrade"), detail = railProblem, severity = "error" }, untilAt = os.clock() + RESULT_SECONDS })
-				bump()
-				return
-			end
+			local targeter = brushOptions.railTargeter(g_toolParams)
 			logMsg("upgrade button: " .. tostring(sel.count(s.stroke)) .. " selected, " .. brushOptions.railKey(g_toolParams))
 			startCommit(s, nil, brushOptions.extras({}), false, targeter)
 			return

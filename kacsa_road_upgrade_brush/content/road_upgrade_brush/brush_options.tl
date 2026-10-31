@@ -16,8 +16,7 @@ local MODE_RAILS <const> = 2
 local TRACK_TYPE_KEY <const> = "rub_trackType"
 local TRACK_STATE_KEY <const> = "rub_trackCatenary"
 local DEFAULT_TRACK_TYPE <const> = 2
-local RAIL_PROBLEM_PREFIX <const> = "rub_railProblem_"
-local RAIL_PROBLEMS : {string} = { "trackYear", "catenaryYear" }
+local RAIL_STATES : {string} = { "keep", "add", "remove" }
 local ROAD_TYPE_KEY <const> = "rub_roadType"
 local PROBLEM_KEY_PREFIX <const> = "rub_problem_"
 local ONE_WAY_MARK <const> = "one_way"
@@ -97,10 +96,30 @@ local function onlyInMode(param : ConstructionMenuParam, rail : boolean)
 	end
 end
 
+local function defaultTrackType(offered : integer) : integer
+	return math.min(DEFAULT_TRACK_TYPE, offered)
+end
+
+-- The toolbar is built once, before the game year is known to it, so the track type list cannot be cut to the year.
+-- Instead each list length has its own combo box, and only the one that matches the number of offered types shows;
+-- with one offered type there is no combo box. The key of the full list is TRACK_TYPE_KEY.
+local function trackTypeKey(offered : integer) : string
+	if offered == #rails.TYPES then return TRACK_TYPE_KEY end
+	return TRACK_TYPE_KEY .. offered
+end
+
+-- The menu remembers values by key: a remembered position can lie outside the choices offered in the game year.
+-- A type without catenary in the game year has no catenary choice in the toolbar: its tracks get no catenary.
 local function trackChoices(params : {string : number}) : integer, string
-	local trackType = math.floor((params or {})[TRACK_TYPE_KEY] or DEFAULT_TRACK_TYPE)
-	if rails.TYPES[trackType] == nil then trackType = DEFAULT_TRACK_TYPE end
-	return trackType, rails.STATES[math.floor((params or {})[TRACK_STATE_KEY] or 1)] or rails.STATES[1]
+	local year = api.engine.util.getYear()
+	local offered = rails.offeredTypes(year)
+	local trackType = 1
+	if offered > 1 then
+		trackType = math.floor((params or {})[trackTypeKey(offered)] or defaultTrackType(offered))
+		if trackType < 1 or trackType > offered then trackType = defaultTrackType(offered) end
+	end
+	if not rails.hasCatenary(trackType, year) then return trackType, "remove" end
+	return trackType, RAIL_STATES[math.floor((params or {})[TRACK_STATE_KEY] or 1)] or "keep"
 end
 
 local function modeParam(railEntry : boolean) : ConstructionMenuParam
@@ -117,53 +136,44 @@ local function modeParam(railEntry : boolean) : ConstructionMenuParam
 	}
 end
 
-local function railNote(problem : string, noteGroup : string) : ConstructionMenuParam
-	local param : ConstructionMenuParam = {
-		key = RAIL_PROBLEM_PREFIX .. problem,
-		name = _("rub_problem_name"),
-		values = { _("rub_chip_" .. problem) },
+local function railParams() : {ConstructionMenuParam}
+	local result : {ConstructionMenuParam} = {}
+	local names : {string} = {}
+	for offered = 1, #rails.TYPES do
+		names[offered] = rails.typeName(offered)
+		if offered > 1 then
+			local values : {string} = {}
+			for i = 1, offered do values[i] = names[i] end
+			result[#result + 1] = {
+				key = trackTypeKey(offered),
+				name = _("rub_trackType_name"),
+				tooltip = _("rub_trackType_tooltip"),
+				values = values,
+				defaultIndex = defaultTrackType(offered),
+				uiType = api.type["enum"].ScriptParamType.ComboBox,
+				yearFrom = 0,
+				yearTo = 0,
+				checkEnabledFn = function(_params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
+					return rails.offeredTypes(api.engine.util.getYear()) == offered and "Enabled" or "Hidden"
+				end,
+			}
+		end
+	end
+	result[#result + 1] = {
+		key = TRACK_STATE_KEY,
+		name = _("Catenary"),
+		tooltip = _("rub_trackCatenary_tooltip"),
+		values = { _("rub_lock_keep"), _("rub_state_add"), _("rub_state_remove") },
 		defaultIndex = 1,
-		uiType = api.type["enum"].ScriptParamType.Button,
+		uiType = api.type["enum"].ScriptParamType.ComboBox,
 		yearFrom = 0,
 		yearTo = 0,
+		resetOnMenuClose = false,
 		checkEnabledFn = function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
-			local trackType, state = trackChoices(params)
-			return rails.problem(trackType, state, api.engine.util.getYear()) == problem and "Disabled" or "Hidden"
+			local trackType = trackChoices(params)
+			return rails.hasCatenary(trackType, api.engine.util.getYear()) and "Enabled" or "Hidden"
 		end,
 	}
-	errorNote(param, noteGroup)
-	return param
-end
-
-local function railParams(noteGroup : string) : {ConstructionMenuParam}
-	local names : {string} = {}
-	for i = 1, #rails.TYPES do names[i] = rails.typeName(i) end
-	local result : {ConstructionMenuParam} = {
-		{
-			key = TRACK_TYPE_KEY,
-			name = _("rub_trackType_name"),
-			tooltip = _("rub_trackType_tooltip"),
-			values = names,
-			defaultIndex = DEFAULT_TRACK_TYPE,
-			uiType = api.type["enum"].ScriptParamType.ComboBox,
-			yearFrom = 0,
-			yearTo = 0,
-		},
-		{
-			key = TRACK_STATE_KEY,
-			name = _("Catenary"),
-			tooltip = _("rub_trackCatenary_tooltip"),
-			values = { _("rub_lock_keep"), _("rub_state_add"), _("rub_state_remove") },
-			defaultIndex = 1,
-			uiType = api.type["enum"].ScriptParamType.ComboBox,
-			yearFrom = 0,
-			yearTo = 0,
-			resetOnMenuClose = false,
-		},
-	}
-	for _, problem in ipairs(RAIL_PROBLEMS) do
-		result[#result + 1] = railNote(problem, noteGroup)
-	end
 	for _, param in ipairs(result) do onlyInMode(param, true) end
 	return result
 end
@@ -191,7 +201,7 @@ function brushOptions.params(noteGroup : string, railEntry? : boolean) : {Constr
 	for _, param in ipairs(result) do
 		if param.key ~= UNDERGROUND_KEY then onlyInMode(param, false) end
 	end
-	for _, param in ipairs(railParams(noteGroup)) do result[#result + 1] = param end
+	for _, param in ipairs(railParams()) do result[#result + 1] = param end
 	result[#result + 1] = modeParam(railEntry == true)
 	return result
 end
@@ -286,14 +296,9 @@ function brushOptions.railKey(params : {string : number}) : string
 	return "rail/" .. trackType .. "/" .. state
 end
 
-function brushOptions.railTargeter(params : {string : number}) : RubRailTarget, string
+function brushOptions.railTargeter(params : {string : number}) : RubRailTarget
 	local trackType, state = trackChoices(params)
-	local year = api.engine.util.getYear()
-	local problem = rails.problem(trackType, state, year)
-	if problem ~= nil then
-		return nil, _("rub_chip_" .. problem)
-	end
-	return rails.targeter(trackType, state, year), nil
+	return rails.targeter(trackType, state, api.engine.util.getYear())
 end
 
 function brushOptions.trackName(clone : RubTrackClone) : string
@@ -302,9 +307,9 @@ end
 
 -- The catenary of a track is copied as Add or Remove: the copy sets exactly what the track has.
 function brushOptions.applyTrack(menu : ConstructionMenuParamsAPI, clone : RubTrackClone) : boolean
-	local stateIndex = clone.catenary and 2 or 3
-	local typeSet = setParam(menu, TRACK_TYPE_KEY, clone.trackType)
-	local stateSet = setParam(menu, TRACK_STATE_KEY, stateIndex)
+	local offered = rails.offeredTypes(api.engine.util.getYear())
+	local typeSet = clone.trackType <= offered and (offered == 1 or setParam(menu, trackTypeKey(offered), clone.trackType))
+	local stateSet = setParam(menu, TRACK_STATE_KEY, clone.catenary and 2 or 3)
 	return typeSet and stateSet
 end
 
