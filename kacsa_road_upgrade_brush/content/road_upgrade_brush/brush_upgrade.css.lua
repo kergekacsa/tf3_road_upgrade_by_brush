@@ -1,4 +1,4 @@
--- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
+-- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884).
 -- The construction menu draws every toolbar param as a ToggleButton. The status chip is a disabled one-value Button
 -- param (brush_upgrade.script.tl KEY_STATUS). Its group id becomes a class of the group's R::Component
 -- ("param-group,<group>"). Every rule here is scoped under that class (GROUP_INFO = "sq-tool-info", shared with

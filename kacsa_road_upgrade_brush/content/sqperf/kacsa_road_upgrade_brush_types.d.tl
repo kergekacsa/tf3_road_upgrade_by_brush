@@ -1,4 +1,4 @@
--- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
+-- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884).
 recordDef = true
 
 -- Global names carry the mod's prefix (RubSqPerf): globals are shared by all loaded mods.

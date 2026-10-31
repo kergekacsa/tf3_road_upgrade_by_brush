@@ -1,4 +1,4 @@
--- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
+-- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884).
 -- Road upgrade brush: paint over roads, then press Upgrade (Road tools). Selection, brush, highlight and toolbar come
 -- from the Bulk Bulldozer tool; bb_upgrade.tl upgrades the roads.
 --

@@ -1,4 +1,4 @@
--- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
+-- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884).
 -- Pure: no api.* calls.
 --
 -- MODE picks how the selection is shown:

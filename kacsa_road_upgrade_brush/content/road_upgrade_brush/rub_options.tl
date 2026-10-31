@@ -1,4 +1,4 @@
--- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083). Private build, not for publication.
+-- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083).
 -- Check boxes and buttons store the 1-based index of the chosen value (check boxes: 1 = no, 2 = yes).
 
 local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig

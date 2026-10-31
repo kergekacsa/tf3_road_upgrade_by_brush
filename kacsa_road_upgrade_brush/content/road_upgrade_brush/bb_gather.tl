@@ -1,4 +1,4 @@
--- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
+-- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884).
 -- Runs only in the GUI custom-action recipe. Read-only: issues no commands.
 -- Every engine read is wrapped in pcall; a vanished entity gets gone = true.
 
