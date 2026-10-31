@@ -2,15 +2,14 @@
 
 ## Outcome
 
-The player paints a brush over street segments, sees them highlighted, picks a road type and the same options as the single-click tool, and presses Upgrade. The tool upgrades up to 50 selected segments in one press. Today the street upgrade tool changes one segment per click.
+The player paints a brush over street segments, sees them highlighted, picks a road type and the same options as the single-click tool, and presses Upgrade. The tool upgrades up to 200 selected segments in one press. Today the street upgrade tool changes one segment per click.
 
-The result is one new mod, `kacsa_road_upgrade_brush`. It combines the single-click upgrader of Road Upgrade Suite with the brush selection of Bulk Bulldozer.
+The result is one new mod, `kacsa_road_upgrade_brush`. It adds a brush tool that combines the road types and options of Road Upgrade All in One with the brush selection of Bulk Bulldozer. The mod is independent of both and contains no single-click tool.
 
 ## Scope
 
 In scope:
 
-- The single-click street upgrader, with its current behaviour.
 - A new brush upgrade tool: select with a brush, then upgrade by street template.
 - Road type, alley trees, and noise barriers for the brush tool. Build steps 1 to 4 deliver these.
 - Bus lane, tram track, catenary, and lock for the brush tool. Build step 5 delivers these. Bus lane and lock work in the game. Tram track and catenary are written again with the corrected lane write (build u) and are not yet tested in the game. The underground option of the single-click tool only switches the underground view on, so that underground roads can be seen and selected (the user's statement, accepted as fact). The brush has the same button (key `undergroundMode`, taken from the single-click tool's options) and reacts to the game's shortcut G.
@@ -28,7 +27,7 @@ Out of scope for the first version:
 
 - The mod MUST use the modId `kacsa_road_upgrade_brush`.
 - The mod folder MUST be `C:\Program Files (x86)\Steam\userdata\56068363\3493540\local\staging_area\kacsa_road_upgrade_brush\`.
-- The mod MUST contain exactly two tools in the road tools menu: the single-click upgrader and the brush upgrade tool.
+- The mod MUST contain exactly one tool in the road tools menu: the brush upgrade tool.
 - The mod MUST NOT contain a Bulldoze button or any removal code.
 - The brush tool MUST upgrade a segment with `api.engine.util.proposal.replaceSegment(edge, template)` and send the proposal with `api.cmd.makeWorldBuildProposalCmd`.
 - The brush tool MUST offer the six two-way road types, the alley trees option, and the noise barrier option.
@@ -63,7 +62,8 @@ Out of scope for the first version:
 - After the user used other tools (for example the landscaping tool) and selected the brush again, the ring MUST follow the pointer, strokes MUST select roads, and the toolbar buttons MUST work, also when the menu has created a second instance of the tool (see Facts, build aq).
 - The mod MUST keep the original authors' names in the headers of copied files.
 - Publishing MUST NOT happen without permission from both original authors.
-- The original Road Upgrade Suite MUST be switched off during tests. The real Bulk Bulldozer MAY stay on.
+- The mod MUST be independent: no mod dependency, and it MUST work with and without Road Upgrade All in One (`road_upgrade_suite`) and Bulk Bulldozer switched on. Every file path and text key of the mod MUST be unique (`road_upgrade_brush/rub_*`, `rub_*` keys, `gui/road_upgrade_brush/`).
+- The mod MUST NOT add a single-click upgrade tool, so no tool of the original mods appears twice in the menu.
 
 Defaults inherited from the bulldozer, not decided separately: paint a stroke, the selection stays highlighted, press the button to apply, Clear or right-click empties the selection, and there is no undo. While an upgrade runs, the Clear button reads Cancel and stops the upgrade after the road in progress; it does not empty the selection, so the roads that are not done stay selected. Without a running upgrade the button reads Clear and empties the selection. Roads already upgraded stay upgraded.
 
@@ -249,7 +249,7 @@ Names the copy changed so it can run next to the real Bulk Bulldozer: the log pr
 
 ## Consequences of the decisions together
 
-- The copy of the single-click tool has the same resource path and the same `rus_*` string keys as the original. Both mods cannot run at the same time.
+- Decision (2026-10-31): the copy of the single-click tool was removed, so that the original tool does not appear twice in the menu. The copy used the same resource paths and `rus_*` string keys as Road Upgrade All in One, so both mods could not run together. The brush stays independent: its copies of `config`, `options`, `rules`, `templates` (identical to the originals) and the icon moved to unique names (`road_upgrade_brush/rub_*.tl`, `rub_*` keys, `gui/road_upgrade_brush/brush_tool*.tga`). The hover probe in `proposal_probe.tl` was hooked into the removed `action.tl`; `probe.install` has no caller now.
 - A cap larger than the command budget would highlight more roads than one press upgrades, so the cap and the budget MUST stay equal (both 200 since build ar).
 - The cost preview builds one proposal per road, so it is made when a stroke ends. The tool script no longer previews the cost while painting.
 - A replaced segment may get a new entity id. The pre-send check then reports a neighbour as gone, and the upgrade is partial. The result line shows the counts.
@@ -268,7 +268,7 @@ Names the copy changed so it can run next to the real Bulk Bulldozer: the log pr
 
 ## Build order
 
-1. Create the skeleton mod with the single-click tool under the new modId. Check: the tool appears in the game, and `stdout.txt` shows no errors (done: the user confirmed the tool works; `stdout.txt` not read yet).
+1. Create the skeleton mod with the single-click tool under the new modId (the tool was removed on 2026-10-31, see the decision in Facts). Check: the tool appears in the game, and `stdout.txt` shows no errors (done: the user confirmed the tool works; `stdout.txt` not read yet).
 2. Compiler and type check setup are installed, and `rus_types.d.tl` declares the missing `Rus*` types. Check: `tl check` passes on every copied file (done: 0 errors in all 7 files).
 3. Copy the brush files and the recipe, change the module prefix, and add the brush tool with an inert Upgrade button. Check: the highlight and the selection counts match what the map shows (done: the user confirmed in the game that it works, including the stroke rule).
 4. Write the upgrade commit module, set the cap and the command budget to 50, and connect the Upgrade button (done: the user confirmed in the game that presses of up to 50 roads work, with two retry passes, the automatic pause, and Clear as cancel; build i). Check: one segment upgrades in the game, then 50 segments, and the result line matches.

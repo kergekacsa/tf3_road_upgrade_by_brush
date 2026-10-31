@@ -1,8 +1,8 @@
 -- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083). Private build, not for publication.
 -- Which combinations of the tool options can be applied. A combination with problems is not sent at all.
 
-local config = ug_require "/road_upgrade_suite/config.tl" as RusConfig
-local templates = ug_require "/road_upgrade_suite/templates.tl" as RusTemplates
+local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RusConfig
+local templates = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_templates.tl" as RusTemplates
 
 local rules : RusRules = {}
 

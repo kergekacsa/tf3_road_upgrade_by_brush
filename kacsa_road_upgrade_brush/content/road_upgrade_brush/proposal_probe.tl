@@ -5,7 +5,8 @@
 
 local probe : ProposalProbe = {}
 
--- Switch for all diagnostics of the mod: the hover probe below, the "segment to send" line of the brush commit, and
+-- Switch for all diagnostics of the mod: the hover probe below (nothing calls install now; a tool action must call it),
+-- the "segment to send" line of the brush commit, and
 -- the instance, layer, and cursor lines of the brush tool. true turns them on.
 probe.ENABLED = false
 

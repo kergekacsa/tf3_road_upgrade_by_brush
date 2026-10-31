@@ -1,7 +1,7 @@
 {
     "name": "Road Upgrade Brush",
-    "summary": "Combined road upgrade tool, with a brush that upgrades many segments at once (work in progress).",
-    "description": "Private build. Step 1: the single-click street upgrader of Road Upgrade All in One by kurowasiichi. Brush selection is planned, based on Bulk Bulldozer by square17.",
+    "summary": "Brush that upgrades many roads at once with the settings of Road Upgrade All in One (work in progress).",
+    "description": "Private build. A brush for the combined road upgrade (road type, bus lane, tram, trees, barriers, lock), based on Road Upgrade All in One by kurowasiichi and Bulk Bulldozer by square17. Works with or without those mods.",
     "authors": [
         {
             "name": "Kacsa",

@@ -1,19 +1,19 @@
--- Options of the brush tool: the single-click tool's menu params without the one-way road types. The underground button (key undergroundMode) is the single-click tool's own. The rules and templates are
--- the single-click tool's.
+-- Options of the brush tool: the menu params of the rub_options module (copied from Road Upgrade All in One) without the one-way
+-- road types. The underground button (key undergroundMode) is the base game's. The rules and templates are the rub_rules and rub_templates modules.
 
-local config = ug_require "/road_upgrade_suite/config.tl" as RusConfig
-local options = ug_require "/road_upgrade_suite/options.tl" as RusOptions
-local rules = ug_require "/road_upgrade_suite/rules.tl" as RusRules
+local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RusConfig
+local options = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_options.tl" as RusOptions
+local rules = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_rules.tl" as RusRules
 local builtin = ug_require "::/gui/main/builtin.lua" as Builtin
 local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as BrushStyle
 
 local brushOptions : BrushOptions = {}
 
-local ROAD_TYPE_KEY <const> = "rus_roadType"
-local PROBLEM_KEY_PREFIX <const> = "rus_problem_"
+local ROAD_TYPE_KEY <const> = "rub_roadType"
+local PROBLEM_KEY_PREFIX <const> = "rub_problem_"
 local ONE_WAY_MARK <const> = "one_way"
 local KEPT_KEYS : {string : boolean} = {
-	rus_busLane = true, rus_tram = true, rus_catenary = true, rus_trees = true, rus_barrier = true, rus_lock = true, undergroundMode = true,
+	rub_busLane = true, rub_tram = true, rub_catenary = true, rub_trees = true, rub_barrier = true, rub_lock = true, undergroundMode = true,
 }
 local REMOVE_BUILDINGS_KEY <const> = "brush_upgrade_remove_buildings"
 local CHECKBOX_NO <const> = 1
@@ -84,7 +84,7 @@ function brushOptions.params(noteGroup : string) : {ConstructionMenuParam}
 			param.values = values
 			result[#result + 1] = param
 		elseif KEPT_KEYS[param.key] then
-			if param.key == "rus_trees" or param.key == "rus_barrier" then disabledUnderground(param) end
+			if param.key == "rub_trees" or param.key == "rub_barrier" then disabledUnderground(param) end
 			result[#result + 1] = param
 		elseif string.sub(param.key, 1, #PROBLEM_KEY_PREFIX) == PROBLEM_KEY_PREFIX then
 			errorNote(param, noteGroup)
@@ -111,14 +111,14 @@ function brushOptions.template(params : {string : number}) : string, string
 		choices.trees = false
 		choices.barrier = false
 	end
-	-- the menu remembers values by key, so a one-way type chosen in the single-click tool can arrive here
+	-- the menu remembers values by key, so a remembered road type can lie outside the offered ones
 	if choices.roadType > offeredRoadTypes() then
 		return nil, _("Choose a road type")
 	end
 	local year = api.engine.util.getYear()
 	local problems = rules.check(choices, year)
 	if #problems > 0 then
-		return nil, _("rus_problem_" .. problems[1])
+		return nil, _("rub_problem_" .. problems[1])
 	end
 	return rules.targetTemplate(choices, year), nil
 end

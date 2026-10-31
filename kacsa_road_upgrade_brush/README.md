@@ -1,13 +1,10 @@
 # Road Upgrade Brush
 
-A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts two street upgrade tools in the road tools menu:
-
-- **Combined Road Upgrade** is the single-click upgrader of "Road Upgrade All in One", unchanged.
-- **Road Upgrade Brush** selects roads with a brush and upgrades them to a street type in one press.
+A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool in the road tools menu: **Road Upgrade Brush**. It selects roads with a brush and upgrades them to a street type in one press. The mod is independent: it works without any other mod and next to the original mods "Road Upgrade All in One" and "Bulk Bulldozer". It has no single-click tool, so the original one does not appear twice in the menu.
 
 ## Before you start
 
-- Switch off the original "Road Upgrade All in One" (`road_upgrade_suite`). This mod contains a copy of it with the same resource paths and string keys, so both cannot run together.
+- No other mod is needed. The original "Road Upgrade All in One" (`road_upgrade_suite`) and "Bulk Bulldozer" MAY stay on: this mod keeps its road type, option, and rule code and its text keys (`rub_*`) under its own names, so nothing is shared with them.
 - Bulk Bulldozer MAY stay on. This mod uses its own names for everything.
 - Pause is handled by the mod: it pauses the game while it upgrades and sets the old speed back when it is done.
 
@@ -40,10 +37,10 @@ A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts two street
 
 ## Credits and use
 
-- The single-click tool is "Road Upgrade All in One" by kurowasiichi (mod.io 6487083).
+- The road types, add-ons, rules, and icon are taken from "Road Upgrade All in One" by kurowasiichi (mod.io 6487083). The headers of the copied files name the author.
 - The brush, selection, highlight, and toolbar code is taken from "Bulk Bulldozer" by square17 (mod.io 6434884). The headers of the copied files name the authors.
 - This mod is for private use. Do not publish it without permission from both authors.
 
 ## Log
 
-The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[BrushUpgrade]`. The log shows each command, the game's messages, and the game speed. The diagnostic lines (`[RUS probe]` hover probe, tool instances, world layer, cursor) are off. To turn them on, set `probe.ENABLED = true` in `content/road_upgrade_brush/proposal_probe.tl`.
+The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[BrushUpgrade]`. The log shows each command, the game's messages, and the game speed. The diagnostic lines (tool instances, world layer, cursor, segment to send) are off. The `[RUS probe]` hover probe is kept in the code but nothing calls it now. To turn them on, set `probe.ENABLED = true` in `content/road_upgrade_brush/proposal_probe.tl`.

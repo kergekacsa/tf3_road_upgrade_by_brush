@@ -2,8 +2,8 @@
 -- Menu parameters of the tool and reading the chosen options from them.
 -- Check boxes and buttons store the 1-based index of the chosen value (check boxes: 1 = no, 2 = yes).
 
-local config = ug_require "/road_upgrade_suite/config.tl" as RusConfig
-local rules = ug_require "/road_upgrade_suite/rules.tl" as RusRules
+local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RusConfig
+local rules = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_rules.tl" as RusRules
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl" as ConstructionReactUtil
 
 local options : RusOptions = {}
@@ -14,7 +14,7 @@ local CatenaryYearFrom <const> = 1910
 local Problems <const> : {RusRules.Problem} = { "treesAndBarrier", "treesCountry", "noTemplate", "busTramLanes" }
 
 --- road type preselected in the menu
-local DefaultRoadType <const> = "rus_type_town_medium"
+local DefaultRoadType <const> = "rub_type_town_medium"
 
 local function defaultRoadTypeIndex() : integer
 	for i, roadType in ipairs(config.roadTypes) do
@@ -30,20 +30,20 @@ local function isYes(params : {string : number}, key : string) : boolean
 end
 
 function options.fromParams(params : {string : number}) : RusChoices
-	local roadTypeIndex = math.floor(params["rus_roadType"] or defaultRoadTypeIndex())
+	local roadTypeIndex = math.floor(params["rub_roadType"] or defaultRoadTypeIndex())
 	if config.roadTypes[roadTypeIndex] == nil then
 		roadTypeIndex = defaultRoadTypeIndex()
 	end
-	local tram = isYes(params, "rus_tram")
+	local tram = isYes(params, "rub_tram")
 	return {
 		roadType = roadTypeIndex,
-		busLane = isYes(params, "rus_busLane"),
+		busLane = isYes(params, "rub_busLane"),
 		tram = tram,
 		-- the catenary parameter only exists from CatenaryYearFrom on
-		catenary = tram and params["rus_catenary"] == 1,
-		trees = isYes(params, "rus_trees"),
-		barrier = isYes(params, "rus_barrier"),
-		lock = isYes(params, "rus_lock"),
+		catenary = tram and params["rub_catenary"] == 1,
+		trees = isYes(params, "rub_trees"),
+		barrier = isYes(params, "rub_barrier"),
+		lock = isYes(params, "rub_lock"),
 		-- bus lanes and tram tracks always go on both sides
 		symmetric = true,
 		underground = params["undergroundMode"] == 1,
@@ -73,9 +73,9 @@ end
 --- A parameter that only shows the explanation of a problem while the problem exists.
 local function problemParam(problem : RusRules.Problem) : ConstructionMenuParam
 	return {
-		key = "rus_problem_" .. problem,
-		name = _("rus_problem_name"),
-		values = { _("rus_problem_" .. problem) },
+		key = "rub_problem_" .. problem,
+		name = _("rub_problem_name"),
+		values = { _("rub_problem_" .. problem) },
 		defaultIndex = 1,
 		uiType = api.type["enum"].ScriptParamType.Button,
 		yearFrom = 0,
@@ -99,19 +99,19 @@ function options.params() : {ConstructionMenuParam}
 
 	local result : {ConstructionMenuParam} = {
 		{
-			key = "rus_roadType",
-			name = _("rus_roadType_name"),
-			tooltip = _("rus_roadType_tooltip"),
+			key = "rub_roadType",
+			name = _("rub_roadType_name"),
+			tooltip = _("rub_roadType_tooltip"),
 			values = roadTypeNames,
 			defaultIndex = defaultRoadTypeIndex(),
 			uiType = api.type["enum"].ScriptParamType.ComboBox,
 			yearFrom = 0,
 			yearTo = 0,
 		},
-		checkBox("rus_busLane"),
-		checkBox("rus_tram"),
+		checkBox("rub_busLane"),
+		checkBox("rub_tram"),
 		{
-			key = "rus_catenary",
+			key = "rub_catenary",
 			name = _("Catenary"),
 			values = { _("Yes"), _("No") },
 			defaultIndex = 1,
@@ -120,23 +120,23 @@ function options.params() : {ConstructionMenuParam}
 			yearFrom = CatenaryYearFrom,
 			yearTo = 0,
 			checkEnabledFn = function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
-				return isYes(params, "rus_tram") and "Enabled" or "Hidden"
+				return isYes(params, "rub_tram") and "Enabled" or "Hidden"
 			end,
 		},
-		checkBox("rus_trees", function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
+		checkBox("rub_trees", function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
 			-- keep it enabled while checked, so that a conflicting choice can be unchecked again
-			if isYes(params, "rus_trees") then
+			if isYes(params, "rub_trees") then
 				return "Enabled"
 			end
-			return (isYes(params, "rus_barrier") or isCountry(params)) and "Disabled" or "Enabled"
+			return (isYes(params, "rub_barrier") or isCountry(params)) and "Disabled" or "Enabled"
 		end),
-		checkBox("rus_barrier", function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
-			if isYes(params, "rus_barrier") then
+		checkBox("rub_barrier", function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
+			if isYes(params, "rub_barrier") then
 				return "Enabled"
 			end
-			return isYes(params, "rus_trees") and "Disabled" or "Enabled"
+			return isYes(params, "rub_trees") and "Disabled" or "Enabled"
 		end),
-		checkBox("rus_lock"),
+		checkBox("rub_lock"),
 	}
 	for __, problem in ipairs(Problems) do
 		result[#result + 1] = problemParam(problem)
