@@ -171,7 +171,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-10-31 au"
+local BUILD <const> = "2026-10-31 aw"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -485,7 +485,7 @@ local function pieceTable(pc : PieceCache, phase : string) : {integer : PieceEnt
 	return t
 end
 
-local function buildOverlay(s : Selection, phase : string, key : string, pc : PieceCache) : Overlay
+local function buildOverlay(s : Selection, phase : string, key : string, pc : PieceCache, budget : integer) : Overlay
 	local c = hl.colors(phase)
 	local color = vec4(c.line)
 	local cached = pieceTable(pc, phase)
@@ -507,7 +507,7 @@ local function buildOverlay(s : Selection, phase : string, key : string, pc : Pi
 		end
 	end
 	local out : Overlay = { key = key, edges = {}, pieces = 0, markers = 0, truncated = false }
-	local markerBudget = math.min(#points, math.floor(hl.MAX_SEGMENTS / 4))
+	local markerBudget = math.min(#points, math.floor(budget / 4))
 	if markerBudget < #points then out.truncated = true end
 	for i = 1, markerBudget do
 		local d = points[i]
@@ -519,7 +519,7 @@ local function buildOverlay(s : Selection, phase : string, key : string, pc : Pi
 		out.edges[#out.edges + 1] = pe.edges[1]
 		out.markers = out.markers + 1
 	end
-	local plan, fit, trunc = hl.piecePlan(curves, hl.MAX_SEGMENTS - out.markers)
+	local plan, fit, trunc = hl.piecePlan(curves, budget - out.markers)
 	if trunc then out.truncated = true end
 	for i = 1, fit do
 		local e = curveOf[i]
@@ -691,6 +691,11 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 
 	local refSkipRelease = react.useRef(false) as ReactRefT<boolean>
 	local refSample = react.useRef(nil) as ReactRefT<Sample>
+	-- Hover preview while a selection waits: the roads under the ring that are not selected yet.
+	local refHover = react.useRef(nil) as ReactRefT<Selection>
+	local refHoverSample = react.useRef(nil) as ReactRefT<Sample>
+	local refHoverOverlay = react.useRef(nil) as ReactRefT<Overlay>
+	local refHoverPieces = react.useRef(nil) as ReactRefT<PieceCache>
 	local refSel = react.useRef(nil) as ReactRefT<Selection>
 	local refVersion = react.useRef(0) as ReactRefT<integer>
 	local refMoved = react.useRef({ count = 0, withLmb = 0, handled = 0, lastAt = 0 }) as ReactRefT<MovedLog>
@@ -767,6 +772,31 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		refSel:set(nil)
 		refSample:set(nil)
 		bump()
+	end
+	-- Samples the roads under the ring into refHover; roads that are already selected are left out.
+	local function updateHover(cur : Vec3f, r : number, now : number, s : Selection)
+		local last = refHoverSample:get()
+		local due = last == nil or last.r ~= r or brush.sampleDue(cur.x - last.x, cur.y - last.y, now - last.at, r)
+		if due and last ~= nil and last.r == r and cur.x == last.x and cur.y == last.y and now - last.at < HOVER_CACHE_TTL then
+			due = false
+		end
+		if not due then return end
+		refHoverSample:set({ x = cur.x, y = cur.y, r = r, at = now })
+		local old = refHover:get()
+		local hs = newSelection(PHASE_IDLE)
+		if old ~= nil and now - old.cache.createdAt < HOVER_CACHE_TTL then
+			hs.cache = old.cache
+			hs.ctx = old.ctx
+		end
+		takeSample(hs, cur.x, cur.y, r, filtersState:old())
+		local already : {integer} = {}
+		for _, e in ipairs(hs.stroke.order) do
+			if s.stroke.keep[e] ~= nil then already[#already + 1] = e end
+		end
+		sel.remove(hs.stroke, already)
+		local changed = old == nil or table.concat(sel.entities(old.stroke), ",") ~= table.concat(sel.entities(hs.stroke), ",")
+		refHover:set(hs)
+		if changed then bump() end
 	end
 	-- After a press only the roads that failed stay selected and highlighted.
 
@@ -1211,6 +1241,14 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			end
 		end
 
+		if cur ~= nil and s ~= nil and s.phase == PHASE_SELECTED and not refShift:get() then
+			updateHover(cur, r, now, s)
+		elseif refHover:get() ~= nil then
+			refHover:set(nil)
+			refHoverSample:set(nil)
+			bump()
+		end
+
 		-- The cost preview is made when a stroke ends (finishStroke), not while painting. It builds one proposal per road.
 
 		s = refSel:get()
@@ -1449,7 +1487,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 					refPieces:set(pc)
 				end
 				local tOverlay = perf:start()
-				local ok, built = pcall(buildOverlay, s, phase, key, pc)
+				local ok, built = pcall(buildOverlay, s, phase, key, pc, hl.MAX_SEGMENTS)
 				perf:stop("overlay", tOverlay)
 				if ok then
 					ov = built
@@ -1465,6 +1503,34 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 				end
 			end
 			overlayEdges = ov.edges
+		end
+		-- The hover preview shares the piece budget of the selection overlay.
+		local hover = refHover:get()
+		if hl.usesLines(hl.MODE) and hover ~= nil and s ~= nil and s.phase == PHASE_SELECTED and sel.count(hover.stroke) > 0 then
+			local budget = hl.MAX_SEGMENTS - #overlayEdges
+			if budget > 0 then
+				local key = tostring(versionState:old()) .. "/hover/" .. tostring(budget)
+				local hov = refHoverOverlay:get()
+				if hov == nil or hov.key ~= key then
+					local pc = refHoverPieces:get()
+					if pc == nil or pc.owner ~= hover.cache then
+						pc = { owner = hover.cache, byPhase = {} }
+						refHoverPieces:set(pc)
+					end
+					local ok, built = pcall(buildOverlay, hover, PHASE_IDLE, key, pc, budget)
+					if ok then
+						hov = built
+					else
+						logMsg("hover overlay failed: " .. tostring(built))
+						hov = { key = key, edges = {}, pieces = 0, markers = 0, truncated = false }
+					end
+					refHoverOverlay:set(hov)
+				end
+				local combined : {Builtin.Type.EdgeRenderable.Edge} = {}
+				for _, v in ipairs(overlayEdges) do combined[#combined + 1] = v end
+				for _, v in ipairs(hov.edges) do combined[#combined + 1] = v end
+				overlayEdges = combined
+			end
 		end
 
 		local bag : {Builtin.Type.EdgeRenderable.Edge} = {}

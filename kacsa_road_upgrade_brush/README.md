@@ -12,14 +12,14 @@ A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool i
 ## How the brush tool works
 
 1. Everything sits in the one toolbar on the left, from top to bottom: the radius, the Underground button, the road options, the progress, and the **Upgrade** and **Clear** buttons. Pick the road type, and optionally alley trees and noise barriers. Besides the slider, the keys **M** (larger) and **N** (smaller) change the radius step by step, and a held key repeats. They are the rotation keys of the game's construction tools, so rebinding them in the game settings rebinds them here.
-2. Hold the left mouse button and paint over the roads. Every road that the brush circle touches is selected.
+2. Hold the left mouse button and paint over the roads. Every road that the brush circle touches is selected. Roads under the circle that are not selected yet show as a light pink preview, also while a selection waits. Selected roads are red.
 3. Hold Shift while painting to remove roads from the selection. Every selected road the brush touches leaves the selection.
 4. Press **Upgrade**. The mod sends one command per road. A road leaves the selection as soon as it is done, or when it already had the target type, so the highlight shrinks while the status line shows the progress (for example "Upgrading 12 of 50" with a bar). Roads that fail count for the progress too, and the retry rounds show as "Retrying failed ones". While it runs, the **Clear** button reads **Cancel**, and a third line says that it stops the progress. At the end the status line shows "X updated, Y failed" with the cost: green when something was updated (with "Y failed" in yellow when some roads failed), red when nothing was updated and some roads failed. It stays until your next stroke, upgrade or clear.
 5. **Clear** or a right click empties the selection. While an upgrade runs, the button reads **Cancel**: it stops the upgrade after the road in progress, keeps the roads that are not done selected, and the tool stays open. Esc does the same when the keyboard focus is on the map. After a click on the **Upgrade** button the game usually gives Esc to its own menu, which closes the tool; the upgrade then stops after the road in progress. Roads already upgraded stay upgraded.
 
 ## Limits
 
-- Up to 200 roads per press. A run takes about half a second per road, and the game stays paused while it runs.
+- Up to 200 roads per press. When 200 roads are selected, the status line reads "200 selected (max)" in yellow. A run takes about half a second per road, and the game stays paused while it runs.
 - The brush offers the six two-way road types. The two one-way road types of Road Upgrade All in One are not offered.
 - Alley trees do not exist for country roads. The toolbar shows a red note for impossible combinations.
 - The brush skips roads of other players, parts of constructions, and industry roads. It upgrades town roads and roads without an owner.

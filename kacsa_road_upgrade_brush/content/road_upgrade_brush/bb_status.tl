@@ -151,9 +151,10 @@ function status.lines(v : RubStatusInput) : RubStatusText
 		return t
 	end
 	if n > 0 and (v.phase == "painting" or v.phase == "selected") then
-		local head = string.format(v.capped and _("%d selected (max)") or _("%d selected"), n)
+		local atCap = v.capped or (v.cap ~= nil and n >= v.cap)
+		local head = string.format(atCap and _("%d selected (max)") or _("%d selected"), n)
 		if v.cost ~= nil then head = head .. " · " .. v.cost end
-		return text(head, kinds)
+		return text(head, kinds, atCap and "warning" or nil)
 	end
 	if v.result ~= nil then
 		return text(v.result.head, v.result.detail, v.result.severity)
