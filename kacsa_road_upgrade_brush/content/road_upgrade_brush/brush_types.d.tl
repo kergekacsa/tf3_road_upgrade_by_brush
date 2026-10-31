@@ -36,9 +36,17 @@ end
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_clone.tl" as RubBrushClone
 global record RubBrushClone
 	--- The street at (x, y): the one whose lanes cover the point (the nearest centre line when several do); tunnels only with `underground`, other streets only without it. nil when there is none. The second result is a text for the log: how many streets were in range and the nearest one.
-	pick : function(x : number, y : number, underground : boolean) : integer, string
+	pick : function(x : number, y : number, underground : boolean, tracks? : boolean) : integer, string
 	--- The settings of a street. nil when its street template is none of the road types of the tool, or it cannot be read.
 	read : function(edge : integer) : RubClone
+end
+
+-- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rail_probe.tl" as RubRailProbe
+global record RubRailProbe
+	--- Logs the track at (x, y) and the track templates of the game, then sends ONE real command that changes that track to the next base track type. false when no upgradable track is there or a probe still runs.
+	run : function(x : number, y : number, underground : boolean, logFn : function(string)) : boolean
+	--- Reads the track again after the command; called on every step of the tool.
+	tick : function()
 end
 
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as RubStyle

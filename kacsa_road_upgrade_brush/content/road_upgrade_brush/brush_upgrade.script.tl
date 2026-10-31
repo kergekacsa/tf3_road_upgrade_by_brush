@@ -23,6 +23,7 @@ local hl = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_highligh
 local brushOptions = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_options.tl" as RubBrushOptions
 local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as RubStyle
 local brushClone = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_clone.tl" as RubBrushClone
+local railProbe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rail_probe.tl" as RubRailProbe
 local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as RubProposalProbe
 
 local PREFIX <const> = "[BrushUpgrade] "
@@ -180,7 +181,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-10-31 bf"
+local BUILD <const> = "2026-10-31 bh"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -1195,6 +1196,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 
 	react.onStep(function()
 		commit.tick()
+		railProbe.tick()
 		local tStep = perf:start()
 		local prm = refParam:get()
 		-- The newest instance is the one the menu keeps up to date, but after other tools were used the menu may keep
@@ -1390,6 +1392,10 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		local edge, note = brushClone.pick(cur.x, cur.y, filtersState:old().underground == true)
 		if edge == nil then
 			logMsg(string.format("copy: no street at %.1f/%.1f; %s", cur.x, cur.y, tostring(note)))
+			if railProbe.run(cur.x, cur.y, filtersState:old().underground == true, logMsg) then
+				say("Rail probe sent", "One track type change, see the log", "warning")
+				return
+			end
 			say(_("Cannot copy this road"), _("No road under the cursor"), "warning")
 			return
 		end
@@ -1882,6 +1888,8 @@ end
 local Ret = {
 	getDefinition = perf:wrap("get_definition", function(constructionDefinition : ResName, _repository : ConstructionActionRepository, _params : {string : number}) : ConstructionDefinition
 		installApiCapture()
+		local isRailEntry = string.find(constructionDefinition, "rail", 1, true) ~= nil
+		logMsg("get definition for " .. tostring(constructionDefinition) .. (isRailEntry and " (rail entry)" or ""))
 		local defaultRadiusIndex = brush.radiusIndex(g_radius or brush.DEFAULT_RADIUS) or brush.radiusIndex(brush.DEFAULT_RADIUS)
 		local params : {ConstructionMenuParam} = {
 			{
@@ -2021,7 +2029,7 @@ local Ret = {
 		end
 		params = ordered		return {
 			resName = constructionDefinition,
-			name = _("Road Upgrade Brush"),
+			name = isRailEntry and "Rail Upgrade Brush" or _("Road Upgrade Brush"),
 			description = _("Upgrade roads with a brush: paint over the roads to select them, then press \"Upgrade\". \"Clear\", right-click or Esc clears the selection. One-way road types are not offered."),
 			icon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/brush_tool.tga" },
 			previewIcon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/brush_tool_preview.tga" },
@@ -2034,7 +2042,7 @@ local Ret = {
 			-- The order must stay below the first year-gated entry for isActionActive(listIndex) to match.
 			menuCategory = {
 				categories = {
-					{ category = "roads_tools", order = 5 },
+					{ category = isRailEntry and "rail_tools" or "roads_tools", order = 5 },
 				},
 			},
 		}

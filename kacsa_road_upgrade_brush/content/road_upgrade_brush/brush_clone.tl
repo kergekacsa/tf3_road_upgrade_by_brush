@@ -64,7 +64,7 @@ local function lanesText(be : Engine.Component.BaseEdge) : string
 	return table.concat(parts, " ")
 end
 
-function clone.pick(x : number, y : number, underground : boolean) : integer, string
+function clone.pick(x : number, y : number, underground : boolean, tracks? : boolean) : integer, string
 	local ok, found = pcall(api.engine.util.octree.findEntitiesInCircle, api.type.Vec2f.new(x, y),
 		QUERY_RADIUS + brush.EDGE_MARGIN, api.type.ComponentType.BASE_EDGE)
 	if not ok or found == nil then return nil, "octree query failed: " .. tostring(found) end
@@ -79,7 +79,7 @@ function clone.pick(x : number, y : number, underground : boolean) : integer, st
 		local be = readEdge(e)
 		local isTunnel = be ~= nil and be.type == api.type.enum.BaseEdgeType.TUNNEL
 		if be ~= nil and be.position0 ~= nil and be.position1 ~= nil and be.tangent0 ~= nil and be.tangent1 ~= nil
-				and isTunnel == underground and isStreet(e) then
+				and isTunnel == underground and isStreet(e) ~= (tracks == true) then
 			streets = streets + 1
 			local d = distanceTo(be, x, y)
 			local half = halfWidth(be)
