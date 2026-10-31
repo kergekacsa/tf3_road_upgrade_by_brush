@@ -42,7 +42,7 @@ A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool i
 
 - The road types, add-ons, and rules are taken from "Road Upgrade All in One" by kurowasiichi (mod.io 6487083). The headers of the copied files name the author. The road type, option, and problem texts in `strings.json` (English and the Traditional Chinese translation, 25 keys each) are copies of the texts of that mod, with the keys renamed to `rub_*`. The tool icon and the mod.io image are drawn for this mod.
 - The brush, selection, highlight, and toolbar code is taken from "Bulk Bulldozer" by square17 (mod.io 6434884). The headers of the copied files name the authors.
-- This mod is for private use. Do not publish it without permission from both authors.
+- This mod is for private use.
 
 ## Log
 
