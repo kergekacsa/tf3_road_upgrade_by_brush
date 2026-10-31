@@ -4,25 +4,25 @@
 --
 -- Wiring: brush_upgrade.res.lua → getDefinition below → ACTION_CUSTOM with the BrushUpgradeAction recipe. The
 -- construction menu mounts the recipe while the entry is selected and the recipe hands the world-layer body to
--- params.setActionFn. getDefinition may run in a different Lua VM than the recipe, so toolbar values reach the
+-- params.setActionFn. getDefinition may run in a different Lua VM than the recipe. Toolbar values reach the
 -- recipe through onChangeFn → api.gui.fireReactEvent → react.onEvent, and getCurrentParams() on activation.
 
-local sqperf = ug_require "kacsa_road_upgrade_brush::/sqperf/kacsa_road_upgrade_brush.lua" as SquareBulkBulldozerSqPerf
+local sqperf = ug_require "kacsa_road_upgrade_brush::/sqperf/kacsa_road_upgrade_brush.lua" as RubSqPerf
 local perf = sqperf.new({ mod = "kacsa_road_upgrade_brush", ctx = "gui", paramKey = "sqperf_log", first = { "action_render" } })
 local perfInit = perf:start()
 
 local react =ug_require "::/gui/main/react.lua" as React
 local builtin = ug_require "::/gui/main/builtin.lua" as Builtin
 local constructionUi = ug_require "::/gui/construction/construction_react_util.tl" as ConstructionReactUtil
-local brush = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush.tl" as BulkBulldozerBrush
-local sel = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_select.tl" as BulkBulldozerSelect
-local gather = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_gather.tl" as BulkBulldozerGather
-local commit = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_upgrade.tl" as BulkBulldozerCommit
-local status = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_status.tl" as BulkBulldozerStatus
-local hl = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_highlight.tl" as BulkBulldozerHighlight
-local brushOptions = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_options.tl" as BrushOptions
-local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as BrushStyle
-local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as ProposalProbe
+local brush = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush.tl" as RubBrush
+local sel = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_select.tl" as RubSelect
+local gather = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_gather.tl" as RubGather
+local commit = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_upgrade.tl" as RubCommit
+local status = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_status.tl" as RubStatus
+local hl = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_highlight.tl" as RubHighlight
+local brushOptions = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_options.tl" as RubBrushOptions
+local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as RubStyle
+local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as RubProposalProbe
 
 local PREFIX <const> = "[BrushUpgrade] "
 local EV_RADIUS <const> = "BrushUpgrade.radius"
@@ -34,11 +34,14 @@ local KEY_RADIUS <const> = "brush_upgrade_radius"
 local KEY_UPGRADE <const> = "brush_upgrade_upgrade"
 local KEY_CLEAR <const> = "brush_upgrade_clear"
 local KEY_STATUS <const> = "brush_upgrade_status"
+-- Input actions of the game: the rotation keys of its construction tools (default keys M and N, rebindable in the game).
+local IA_RADIUS_GROW <const> = "constructOpt1"
+local IA_RADIUS_SHRINK <const> = "constructOpt2"
 -- Toolbar groups: consecutive params with the same `group` and hideLabel share one horizontal row; a named group
 -- gets a separator line before it.
 local GROUP_ACTIONS <const> = "brush_upgrade_actions"
--- the status chip's group: its id is the class brush_upgrade.css.lua scopes its rules under, so the chip reads as
--- plain text, as Smart Lanes' info block. Dashes: the stylesheet parser reads class names as [%a%d-]+ only
+-- The status chip's group id is the class that brush_upgrade.css.lua scopes its rules under.
+-- The stylesheet parser reads class names as [%a%d-]+ only.
 local GROUP_INFO <const> = "sq-tool-info"
 
 -- What the selection shows: the hover preview (nothing selected), a stroke being painted (LMB held, adding), the
@@ -51,14 +54,14 @@ local PHASE_COMMITTING <const> = "committing"
 -- A result / notice stays in the status chip this long (seconds).
 local RESULT_SECONDS <const> = 3.0
 -- A commit with no progress (no road finished, no retry pass started) for this long is given up on screen (seconds).
--- The time counts from the last progress, so a long press of many roads is not cut off.
+-- The time counts from the last progress.
 local COMMIT_TIMEOUT <const> = 120.0
 
 -- The ring follows the cursor once it moved this far (metres); smaller moves don't re-render.
 local CURSOR_EPS <const> = 0.25
 -- Moved events are summarised in one log line at most this often (seconds).
 local MOVED_LOG_INTERVAL <const> = 0.5
--- The hover preview drops its descriptor cache this often (seconds), so it never goes stale.
+-- The hover preview drops its descriptor cache this often (seconds).
 local HOVER_CACHE_TTL <const> = 2.0
 -- A sample slower than this is logged (seconds), at most once a second.
 local SLOW_SAMPLE <const> = 0.004
@@ -71,20 +74,20 @@ local RMB_CLICK_MAX_PX <const> = 16
 -- The world layer (actionFn) counts as closed once it stays unmounted this long (os.clock s). An
 -- unmount followed by a mount in the same frame (re-binding) is not a close.
 local LAYER_GONE_SECONDS <const> = 0.25
--- Held at the LMB press: the stroke removes from the selection (base hold modifier, Shift by
--- default; used the same way by move_it and the base track builder).
+-- Held at the LMB press: the stroke removes from the selection (base hold modifier, Shift by default).
+
 local IA_ERASE <const> = "IA_PRECISION_MODE"
 
 -- The toolbar params map the menu last passed to the status chip's checkEnabledFn (EV_SHOWN carries it
 -- across Lua states). The upgrade reads the road type, trees and barrier choice from it.
 local g_toolParams : {string : number} = {}
 
--- The brush radius (m) the player chose last. Like g_toolParams it lives until the GUI is rebuilt, so the toolbar and
--- the tool start with the values of the last use in this game session.
+-- The brush radius (m) the player chose last. Like g_toolParams it lives until the GUI is rebuilt.
+
 local g_radius : number = nil
 
--- The menu's params API, kept from the last toolbar callback that got it, so that the shortcut can change the
--- Underground button of the toolbar. nil until one toolbar control was used.
+-- The menu's params API from the last toolbar callback that got it. nil until one toolbar control was used.
+
 local g_menuApi : ConstructionMenuParamsAPI = nil
 
 local function rememberApi(menuApi : ConstructionMenuParamsAPI)
@@ -100,8 +103,8 @@ end
 local g_viewOverride : ViewOverride = nil
 
 -- The menu hands a reference to the params API of its bottom bar, where the toolbar params live, to getActionParams
--- whenever it builds the action of the selected tool (its eighth argument). The wrapper keeps it, so the API is at
--- hand without a click on the toolbar.
+-- whenever it builds the action of the selected tool (its eighth argument).
+
 local type GetActionParams = function(definition : ConstructionDefinition, params : {string : number}, repository : ConstructionActionRepository,
 	isGamepadMode : boolean, refParams : ReactRefWrapApiT<any, ConstructionMenuParamsAPI>, entity : Engine.Entity,
 	accessNotificationCacheFn : (function(Engine.Entity) : {Notification}), sublistParamsApi : ReactRefWrapApiT<any, ConstructionMenuParamsAPI>,
@@ -163,13 +166,12 @@ local function logMsg(msg : string)
 	pcall(function() log.message(PREFIX .. msg) end)
 end
 
--- Lines of the diagnostics (instances, world layer, cursor); written only when probe.ENABLED is true.
 local function diagMsg(msg : string)
 	if probe.ENABLED then logMsg(msg) end
 end
 
--- Changes with every edit of the mod; the log line below shows which edit the game runs.
-local BUILD <const> = "2026-10-31 as"
+-- Changes with every edit of the mod.
+local BUILD <const> = "2026-10-31 au"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -182,9 +184,9 @@ local record RadiusEvent
 	meters : number
 end
 local record ShownEvent
-	params : {string : number}  -- the whole toolbar params map
+	params : {string : number}
 end
-local record BulkBulldozerActionParam end
+local record RubActionParam end
 local record MovedLog
 	count : integer       -- Moved events since the last summary
 	withLmb : integer     -- of those, while LMB was held
@@ -200,16 +202,16 @@ end
 -- Everything about the current selection; mutated in place, re-rendered via versionState.
 local record Selection
 	phase : string
-	stroke : BulkBulldozerStroke
-	cache : BulkBulldozerGatherCache
-	ctx : BulkBulldozerContext
+	stroke : RubStroke
+	cache : RubGatherCache
+	ctx : RubContext
 	samples : integer
 	worst : number          -- slowest sample in seconds
 	truncated : boolean     -- an octree query hit SAMPLE_MAX_ENTITIES
 	slowLoggedAt : number
 	rawEdges : integer      -- DEBUG_OCTREE: octree BASE_EDGE hits at exactly r (-1 = query failed)
 	rawCons : integer       -- DEBUG_OCTREE: octree CONSTRUCTION hits at exactly r
-	preview : BulkBulldozerPreview  -- last makeProposalData summary of the stroke (nil = none yet)
+	preview : RubPreview  -- last makeProposalData summary of the stroke (nil = none yet)
 	previewAt : number      -- os.clock() of that preview
 	previewCount : integer  -- stroke size it was computed for
 	previewTemplate : string  -- street template it was computed for
@@ -224,14 +226,14 @@ local record RmbPress
 	y : integer
 end
 local record ResultLine
-	text : BulkBulldozerStatusText
+	text : RubStatusText
 	untilAt : number        -- os.clock() deadline
 	sticky : boolean        -- shown until the next stroke, upgrade or clear, whatever is selected (the end of a run)
 end
 
--- Status chip text shared between the action recipe (writer) and the BulkBulldozerStatus recipe in the toolbar
--- (reader). Same module, same Lua state: the construction menu loads this file once. The EV_STATUS event carries the
--- same text in case the two ever run in different Lua states.
+-- Status chip text shared between the action recipe (writer) and the RubStatus recipe in the toolbar
+-- (reader). The construction menu loads this file once. The EV_STATUS event carries the same text across Lua states.
+
 local record StatusEvent
 	head : string
 	detail : string
@@ -242,11 +244,11 @@ local record StatusEvent
 	tailSeverity : string
 	version : integer
 end
--- File-scope state outlives the recipe (the module stays loaded across unmounts), so the action
--- recipe resets it on mount and unmount (resetStatus) and the chip never shows a stale selection.
+-- File-scope state outlives the recipe (the module stays loaded across unmounts). The action recipe resets it on
+-- mount and unmount (resetStatus).
 local g_status : StatusEvent = { head = status.idle().head, detail = status.idle().detail, severity = nil, hint = nil, running = false, tail = nil, tailSeverity = nil, version = 0 }
 
-local function publishStatus(t : BulkBulldozerStatusText)
+local function publishStatus(t : RubStatusText)
 	g_status = { head = t.head, detail = t.detail, severity = t.severity, hint = t.hint, running = t.running, tail = t.tail, tailSeverity = t.tailSeverity, version = g_status.version + 1 }
 	pcall(api.gui.fireReactEvent, EV_STATUS, g_status)
 end
@@ -296,7 +298,7 @@ local function paramsToString(p : {string : number}) : string
 	return "{" .. table.concat(parts, ", ") .. "}"
 end
 
-local function filtersToString(f : BulkBulldozerFilters) : string
+local function filtersToString(f : RubFilters) : string
 	local on : {string} = {}
 	local ff = f as {string : boolean}
 	for _, k in ipairs(sel.FILTER_KEYS) do
@@ -314,7 +316,6 @@ local function terrainHeight(x : number, y : number) : number
 	return api.engine.terrain.getHeightAt(api.type.Vec2f.new(x, y))
 end
 
--- One EdgeRenderable edge per ring arc.
 local function ringEdges(cx : number, cy : number, r : number, color : Vec4f) : {Builtin.Type.EdgeRenderable.Edge}
 	local edges : {Builtin.Type.EdgeRenderable.Edge} = {}
 	local width = brush.ringWidth(r)
@@ -349,8 +350,7 @@ local function vec4(c : {number}) : Vec4f
 	return api.type.Vec4f.new(c[1], c[2], c[3], c[4])
 end
 
--- Selection overlay (bb_highlight "lines"): one straight EdgeRenderable piece.
-local function segmentEdge(sg : BulkBulldozerSegment, color : Vec4f, width : number) : Builtin.Type.EdgeRenderable.Edge
+local function segmentEdge(sg : RubSegment, color : Vec4f, width : number) : Builtin.Type.EdgeRenderable.Edge
 	local dx, dy = sg.x1 - sg.x0, sg.y1 - sg.y0
 	local len = math.sqrt(dx * dx + dy * dy)
 	if len < 0.05 then return nil end
@@ -369,7 +369,6 @@ local function segmentEdge(sg : BulkBulldozerSegment, color : Vec4f, width : num
 	return viz
 end
 
--- A full circle on a construction's origin.
 local function markerEdge(x : number, y : number, color : Vec4f, width : number) : Builtin.Type.EdgeRenderable.Edge
 	local z = safeHeight(x, y)
 	local r = hl.MARKER_RADIUS
@@ -391,11 +390,11 @@ local function markerEdge(x : number, y : number, color : Vec4f, width : number)
 	return viz
 end
 
--- One brush sample into the selection's stroke. Returns true when the stroke changed.
-local function takeSample(s : Selection, x : number, y : number, r : number, f : BulkBulldozerFilters) : boolean
+-- Returns true when the stroke changed.
+local function takeSample(s : Selection, x : number, y : number, r : number, f : RubFilters) : boolean
 	local tPerf = perf:start()
 	local ok, res = pcall(gather.sample, x, y, r, f, s.ctx, s.cache)
-	-- Wall ms (SQPERF's Clock): res.seconds is os.clock, which reads 3-6x high under load.
+	-- Wall milliseconds (SQPERF's Clock). res.seconds is os.clock and reads 3-6x high under load.
 	local ms = perf:stop("sample", tPerf)
 	if not ok then
 		logMsg("sample failed: " .. tostring(res))
@@ -420,7 +419,7 @@ end
 
 -- One Shift-stroke sample: every selected entity the brush touches leaves the selection, whatever
 -- the filters say. Returns true when the selection changed.
-local function eraseSample(s : Selection, x : number, y : number, r : number, f : BulkBulldozerFilters) : boolean
+local function eraseSample(s : Selection, x : number, y : number, r : number, f : RubFilters) : boolean
 	local tPerf = perf:start()
 	local ok, res = pcall(gather.sample, x, y, r, f, s.ctx, s.cache)
 	perf:stop("erase_sample", tPerf)
@@ -445,7 +444,7 @@ end
 local EDGE_KINDS : {string : boolean} = { road = true, track = true }
 
 -- The stroke's kept entities split into edges and constructions (add order).
-local function strokeLists(st : BulkBulldozerStroke) : {integer}, {integer}
+local function strokeLists(st : RubStroke) : {integer}, {integer}
 	local edges : {integer} = {}
 	local cons : {integer} = {}
 	for _, e in ipairs(st.order) do
@@ -455,8 +454,8 @@ local function strokeLists(st : BulkBulldozerStroke) : {integer}, {integer}
 	return edges, cons
 end
 
--- The highlight overlay of one selection state, cached until the selection or phase changes
--- (the action re-renders on every cursor move for the ring).
+-- The highlight overlay of one selection state, cached until the selection or phase changes.
+
 local record Overlay
 	key : string
 	edges : {Builtin.Type.EdgeRenderable.Edge}
@@ -465,16 +464,15 @@ local record Overlay
 	truncated : boolean   -- MAX_SEGMENTS reached; some pieces / edges left out
 end
 
--- Overlay pieces per entity, reused across rebuilds: the overlay is rebuilt on
--- every selection change (each brush sample that adds something, every hover change), and making
--- up to MAX_SEGMENTS EdgeRenderable pieces from scratch each time is the costly part. An entity's
--- pieces only depend on its descriptor (same gather cache), the phase colours and its piece count.
+-- Overlay pieces per entity, reused across rebuilds. An entity's pieces depend only on its descriptor (same gather
+-- cache), the phase colours and its piece count.
+
 local record PieceEntry
 	n : integer                                  -- piece count it was cut into (markers: 0)
 	edges : {Builtin.Type.EdgeRenderable.Edge}
 end
 local record PieceCache
-	owner : BulkBulldozerGatherCache             -- the descriptors these pieces were made from
+	owner : RubGatherCache             -- the descriptors these pieces were made from
 	byPhase : {string : {integer : PieceEntry}}
 end
 
@@ -491,9 +489,9 @@ local function buildOverlay(s : Selection, phase : string, key : string, pc : Pi
 	local c = hl.colors(phase)
 	local color = vec4(c.line)
 	local cached = pieceTable(pc, phase)
-	local curves : {BulkBulldozerCurve} = {}
+	local curves : {RubCurve} = {}
 	local curveOf : {integer} = {}
-	local points : {BulkBulldozerDesc} = {}
+	local points : {RubDesc} = {}
 	for _, e in ipairs(s.stroke.order) do
 		local cand = s.stroke.keep[e]
 		local d = s.cache.descs[e]
@@ -554,7 +552,7 @@ local function previewCost(s : Selection) : integer
 	return s.preview.cost
 end
 
--- Fresh makeProposalData summary of the whole stroke.
+-- makeProposalData summary of the whole stroke.
 local function updatePreview(s : Selection)
 	local tPerf = perf:start()
 	local edges = strokeLists(s.stroke)
@@ -582,10 +580,10 @@ local function logStroke(what : string, s : Selection)
 end
 
 -- Underground view: with "Underground" on, the world layer shows what the base bulldozer's Underground button shows:
--- LayerConfig.undergroundMode plus the white screen. The menu's own LayerConfig never applies to this entry:
--- setActionFn replaces the menu's actionFn that renders it, so the layer is a child of our ActionDescriptor, as the
--- base custom selector actions do. Built once per Lua state; nil where the platform lacks a piece (then no
--- underground view, the filter still selects tunnels).
+-- LayerConfig.undergroundMode plus the white screen. The menu's own LayerConfig never applies to this entry
+-- (setActionFn replaces the menu's actionFn that renders it). The layer is a child of our ActionDescriptor.
+-- Built once per Lua state; nil where the platform lacks a piece (then no underground view, the filter still
+-- selects tunnels).
 local g_undergroundLayer : LayerConfig = nil
 local g_undergroundTried = false
 
@@ -607,7 +605,7 @@ local function undergroundLayerConfig() : LayerConfig
 end
 
 -- The same layer with the underground view explicitly off. It replaces the underground layer when the view is
--- switched off, so the game does not keep the underground view of the layer that is gone.
+-- switched off.
 local g_surfaceLayer : LayerConfig = nil
 
 local function surfaceLayerConfig() : LayerConfig
@@ -627,31 +625,31 @@ local function undergroundLayer(on : boolean) : TreeNodeId
 	return recipe({ config = cfg })
 end
 
--- The tool needs the terrain position under the cursor for the brush. When the game gives none for a while, the
--- log says so (at most NO_TERRAIN_MAX_LINES lines per session).
+-- When the game gives no terrain position under the cursor for a while, the log says so (at most
+-- NO_TERRAIN_MAX_LINES lines per session).
 local NO_TERRAIN_AFTER <const> = 1.5
 local NO_TERRAIN_MAX_LINES <const> = 12
 local g_noTerrainSince : number = nil
 local g_noTerrainLines = 0
 
--- Cursor diagnostic (only with probe.ENABLED): after the tool is activated or its world layer is mounted again, the step logs the terrain
--- position under the cursor and the ring position every DIAG_INTERVAL seconds, at most DIAG_EPISODE_LINES lines per
--- session. A ring that does not follow the pointer shows here whether the game gives a fixed position or the step
--- does not run. The first step after the world layer is gone also logs once.
+-- Cursor diagnostic (only with probe.ENABLED): after the tool is activated or its world layer is mounted again, the
+-- step logs the terrain position under the cursor and the ring position every DIAG_INTERVAL seconds, at most
+-- DIAG_EPISODE_LINES lines per session. The first step after the world layer is gone also logs once.
+
 local DIAG_INTERVAL <const> = 1.5
 local DIAG_EPISODE_LINES <const> = 12
 local g_diagArmed = false
 local g_diagLines = 0
 local g_diagNextAt : number = 0
 local g_noLayerLogged = false
--- Number of tool instances created in this session; the menu may mount the recipe more than once.
+-- Number of tool instances created in this session.
 local g_instances = 0
 
 -- The instance whose world layer is mounted (the one the game draws and sends the mouse events to), and the way to
 -- give it the tool state of the newest instance (see the step). The state passed in stays for PUSH_GRACE_SECONDS.
 local PUSH_GRACE_SECONDS <const> = 0.5
 local g_layerOwnerId = 0
-local g_layerOwnerSetParam : function(ConstructionCustomActionParams<BulkBulldozerActionParam>) = nil
+local g_layerOwnerSetParam : function(ConstructionCustomActionParams<RubActionParam>) = nil
 local g_passLogged = false
 
 local function armDiagnostic()
@@ -670,27 +668,27 @@ local function logNoTerrain(lmbDown : boolean)
 	end
 end
 
-local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
-	perf:wrap("action_render", function(param : ConstructionCustomActionParams<BulkBulldozerActionParam>) : TreeNodeId
+local RubAction = react.RegisterRecipe("BrushUpgradeAction",
+	perf:wrap("action_render", function(param : ConstructionCustomActionParams<RubActionParam>) : TreeNodeId
 
 	-- All hooks first, in a fixed order; the isActive gate comes after them.
 	local radiusState = react.useState(g_radius or brush.DEFAULT_RADIUS) as ReactStateT<number>
-	local filtersState = react.useState(sel.defaultFilters()) as ReactStateT<BulkBulldozerFilters>
+	local filtersState = react.useState(sel.defaultFilters()) as ReactStateT<RubFilters>
 	local cursorState = react.useState(nil) as ReactStateT<Vec3f>
-	local versionState = react.useState(0) as ReactStateT<integer>   -- bumped when the selection changes
+	local versionState = react.useState(0) as ReactStateT<integer>
 	local refLmbDown = react.useRef(false) as ReactRefT<boolean>
 	local refShift = react.useRef(false) as ReactRefT<boolean>      -- Shift held at the last step
-	local refRmbPress = react.useRef(nil) as ReactRefT<RmbPress>     -- last RMB press position
+	local refRmbPress = react.useRef(nil) as ReactRefT<RmbPress>
 	local refRenderActive = react.useRef(false) as ReactRefT<boolean> -- isActive at the last render
 	local refLayerDownAt = react.useRef(nil) as ReactRefT<number>     -- os.clock() the world layer unmounted
 	local refLayerUp = react.useRef(false) as ReactRefT<boolean>      -- world layer mounted: this entry is the selected tool
-	local refInstance = react.useRef(0) as ReactRefT<integer>         -- number of this instance, for the log
+	local refInstance = react.useRef(0) as ReactRefT<integer>         -- number of this instance
 	if refInstance:get() == 0 then
 		g_instances = g_instances + 1
 		refInstance:set(g_instances)
 		diagMsg(string.format("instance #%d created", g_instances))
 	end
-	-- The next LMB release is ignored (it ends a press that RMB cleared or that came mid-commit).
+
 	local refSkipRelease = react.useRef(false) as ReactRefT<boolean>
 	local refSample = react.useRef(nil) as ReactRefT<Sample>
 	local refSel = react.useRef(nil) as ReactRefT<Selection>
@@ -698,21 +696,21 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 	local refMoved = react.useRef({ count = 0, withLmb = 0, handled = 0, lastAt = 0 }) as ReactRefT<MovedLog>
 	local refWasActive = react.useRef(false) as ReactRefT<boolean>
 	local refJob = react.useRef(0) as ReactRefT<integer>            -- id of the latest commit
-	local refResult = react.useRef(nil) as ReactRefT<ResultLine>    -- status chip result (3 s)
+	local refResult = react.useRef(nil) as ReactRefT<ResultLine>    -- status chip result
 	local refStatusKey = react.useRef("") as ReactRefT<string>      -- last published status text
-	local refOverlay = react.useRef(nil) as ReactRefT<Overlay>      -- cached highlight lines
-	local refPieces = react.useRef(nil) as ReactRefT<PieceCache>    -- overlay pieces per entity
-	local refHlSet = react.useRef({}) as ReactRefT<{integer : boolean}>  -- highlighted, for the Selector filter
+	local refOverlay = react.useRef(nil) as ReactRefT<Overlay>
+	local refPieces = react.useRef(nil) as ReactRefT<PieceCache>
+	local refHlSet = react.useRef({}) as ReactRefT<{integer : boolean}>  -- read by the Selector filter
 	local refTruncLogged = react.useRef(nil) as ReactRefT<Selection> -- selection whose overlay cap was logged
 	local refUndergroundShown = react.useRef(false) as ReactRefT<boolean> -- the underground layer was added since the tool opened
 	-- The latest params for the step/event callbacks (they may outlive this render's closure).
-	local refParam = react.useRef(param) as ReactRefT<ConstructionCustomActionParams<BulkBulldozerActionParam>>
+	local refParam = react.useRef(param) as ReactRefT<ConstructionCustomActionParams<RubActionParam>>
 	local refPushedAt = react.useRef(-PUSH_GRACE_SECONDS) as ReactRefT<number>   -- os.clock() a newer instance passed its state in
 	-- A render of an instance that the menu no longer updates carries old params; while a newer instance passes the
 	-- current ones in, they stay.
 	if os.clock() - refPushedAt:get() > PUSH_GRACE_SECONDS then refParam:set(param) end
-	-- The shortcut of the game for the underground view (G). The game registers it only for its own builder tools, so
-	-- the tool handles it: the view switches at once, and the toolbar button follows when the menu's API is at hand.
+	-- The game's shortcut for the underground view (G). The game registers it only for its own builder tools.
+	-- The view switches at once; the toolbar button follows when the menu's API is at hand.
 	local syncFilters : function(string)
 	react.useInputAction("IA_UNDERGOUND_MODE_TOGGLE", react.iaHandler(function()
 		if not refParam:get().isActive then return end
@@ -738,6 +736,28 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		syncFilters("shortcut")
 	end))
 
+	-- One step along brush.RADII. Only the instance whose world layer is mounted acts; a held key repeats.
+	local function stepRadius(direction : integer)
+		if not refLayerUp:get() or not refParam:get().isActive then return end
+		local current = brush.radiusIndex(radiusState:old()) or brush.radiusIndex(brush.DEFAULT_RADIUS)
+		local target = math.max(1, math.min(#brush.RADII, current + direction))
+		if target == current then return end
+		local r = brush.RADII[target]
+		g_radius = r
+		radiusState:set(r)
+		local menu = menuParamsApi()
+		local toolbar = false
+		if menu ~= nil then
+			toolbar = pcall(function()
+				local info = menu.getParamByKey(KEY_RADIUS)
+				if info ~= nil then menu.changeParam(info.index, r) end
+			end)
+		end
+		if debugLog() then logMsg(string.format("radius key: %d m, toolbar slider %s", math.floor(r), toolbar and "set" or "not reachable")) end
+	end
+	react.useInputAction(IA_RADIUS_GROW, react.iaHandler(function() stepRadius(1) end, nil, nil, true))
+	react.useInputAction(IA_RADIUS_SHRINK, react.iaHandler(function() stepRadius(-1) end, nil, nil, true))
+
 	local function bump()
 		refVersion:set(refVersion:get() + 1)
 		versionState:set(refVersion:get())
@@ -748,8 +768,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		refSample:set(nil)
 		bump()
 	end
-	-- After a press only the roads that failed stay selected and highlighted: they can be seen, and another
-	-- press tries them again.
+	-- After a press only the roads that failed stay selected and highlighted.
+
 	local function keepOnly(s : Selection, kept : {integer})
 		local isKept : {integer : boolean} = {}
 		for _, e in ipairs(kept) do isKept[e] = true end
@@ -769,7 +789,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		local s = refSel:get()
 		return s ~= nil and (s.phase == PHASE_PAINTING or s.phase == PHASE_SELECTED)
 	end
-	-- One log line for every Esc that reaches the tool, from either path, so a stuck Esc can be told from one that never arrived.
+	-- One log line for every Esc that reaches the tool, from either path.
 	local function logEsc(path : string)
 		local s = refSel:get()
 		logMsg(string.format("Esc received (%s): phase %s, %d selected", path, s ~= nil and s.phase or "none", s ~= nil and sel.count(s.stroke) or 0))
@@ -795,15 +815,15 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		resetToIdle()
 	end
 	-- The tool was closed, switched or hidden: drop the selection, the hover preview, the result line and the status
-	-- chip, so reopening starts empty. A running commit is cancelled and ends after the road in progress; its result
-	-- is no longer shown. rerender = false when called during a render or an unmount (no state updates there).
+	-- chip. A running commit is cancelled and ends after the road in progress; its result is no longer shown.
+	-- rerender = false when called during a render or an unmount (no state updates there).
 	local function resetAll(why : string, rerender : boolean)
 		local s = refSel:get()
 		if s ~= nil and (s.phase == PHASE_PAINTING or s.phase == PHASE_SELECTED) then
 			logMsg(string.format("selection cleared (%s): %d selected, nothing removed", why, sel.count(s.stroke)))
 		elseif s ~= nil and s.phase == PHASE_COMMITTING then
-			-- The commit is driven by the steps of this recipe, so it would stop where it is, with the game still paused. It is
-			-- cancelled instead: it ends after the road in progress and sets the game speed back.
+			-- The commit is driven by the steps of this recipe. Cancelling lets it end after the road in progress and set the
+			-- game speed back.
 			logMsg("tool closed while upgrading (" .. why .. "); cancelling the upgrade after the road in progress")
 			refJob:set(refJob:get() + 1)
 			pcall(commit.cancel)
@@ -823,8 +843,6 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		if rerender then bump() end
 	end
 
-	-- Mount / unmount of the tool recipe:
-	-- file-scope state (g_status) survives an unmount, so both ends reset it.
 	react.onMount(function()
 		resetStatus()
 		diagMsg(string.format("instance #%d mounted", refInstance:get()))
@@ -834,14 +852,13 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		pcall(function() diagMsg(string.format("instance #%d unmounted", refInstance:get())) end)
 		pcall(resetAll, "tool closed", false)
 	end)
-	-- isActive dropped since the last render: clear at once (onStep may not run any more when the menu is hidden).
+	-- isActive dropped since the last render. onStep may not run any more when the menu is hidden.
 	if refRenderActive:get() and not param.isActive then
 		pcall(resetAll, "tool closed", false)
 	end
 	refRenderActive:set(param.isActive == true)
 
-	-- Upgrades the selection to the street template (bb_upgrade).
-	local function startCommit(s : Selection, template : string, extras : BrushExtras, removeBuildings : boolean)
+	local function startCommit(s : Selection, template : string, extras : RubExtras, removeBuildings : boolean)
 		local edges = strokeLists(s.stroke)
 		refResult:set(nil)
 		s.phase = PHASE_COMMITTING
@@ -853,7 +870,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		refJob:set(job)
 		logStroke("commit", s)
 		bump()
-		local onDone = function(res : BulkBulldozerCommitResult)
+		local onDone = function(res : RubCommitResult)
 			-- pcall: the tool may have been closed (recipe unmounted) before the last callback.
 			pcall(function()
 				if refJob:get() ~= job then return end   -- given up on (timeout), tool closed or superseded
@@ -877,9 +894,9 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 				bump()
 			end)
 		end
-		-- A road that is done (upgraded, already the target, or dropped by the rules) leaves the selection at once, so
-		-- the highlight shrinks while the upgrade runs. A road whose command failed stays, and counts for the progress
-		-- all the same. The commit also calls this with no road when a retry pass starts.
+		-- A road that is done (upgraded, already the target, or dropped by the rules) leaves the selection at once.
+		-- A road whose command failed stays and counts for the progress. The commit also calls this with no road when a
+		-- retry pass starts.
 		local onRoad = function(e : integer, ok : boolean, finishedCount : integer, total : integer, attempt : integer)
 			-- pcall: the tool may have been closed (recipe unmounted) before the last callback.
 			pcall(function()
@@ -894,7 +911,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 				s.retryAttempt = attempt
 				bump()
 			end)
-		end		local tPerf = perf:start()
+		end
+		local tPerf = perf:start()
 		local ok, err = pcall(function() : string
 			commit.commit(edges, template, extras, removeBuildings, s.ctx, s.cache.industryRoads, onDone, logMsg, onRoad)
 			return nil
@@ -908,8 +926,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		end
 	end
 
-	-- LMB released: the selection stays (highlighted) and waits for Upgrade; the next stroke adds to it. Nothing is
-	-- changed here.
+	-- LMB released: the selection stays (highlighted) and waits for Upgrade; the next stroke adds to it.
+
 	local function finishStroke(s : Selection)
 		local what = s.erasing and "erase stroke" or "stroke"
 		s.erasing = false
@@ -1018,11 +1036,11 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			bump()
 		end
 	end)
-	-- The status chip text for the current selection (or hover preview) and result line.
-	local function statusNow() : BulkBulldozerStatusText
+
+	local function statusNow() : RubStatusText
 		local s = refSel:get()
 		local rl = refResult:get()
-		local v : BulkBulldozerStatusInput = {
+		local v : RubStatusInput = {
 			phase = s ~= nil and s.phase or "none",
 			count = s ~= nil and sel.count(s.stroke) or 0,
 			kindCounts = s ~= nil and s.stroke.kindCounts or {},
@@ -1039,7 +1057,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		if rl ~= nil and rl.sticky and (s == nil or s.phase ~= PHASE_COMMITTING) then return rl.text end
 		return status.lines(v)
 	end
-	-- Publish to the toolbar chip only when the text changed.
+
 	local function publishIfChanged()
 		local t = statusNow()
 		local key = t.head .. "\n" .. t.detail .. "\n" .. tostring(t.severity) .. "\n" .. tostring(t.hint) .. "\n" .. tostring(t.running) .. "\n" .. tostring(t.tail)
@@ -1102,9 +1120,9 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			logMsg("world layer unmounted")
 			resetAll("tool switched", true)
 		end
-		-- isActive stays true for every entry of the shown tab in mouse mode (the menu mounts each entry's recipe), so
-		-- with another tool of Road → Tools selected (Smart Lanes) the brush below would sample under the cursor
-		-- every frame. Only the selected entry's world layer is mounted.
+		-- isActive stays true for every entry of the shown tab in mouse mode (the menu mounts each entry's recipe).
+		-- Only the selected entry's world layer is mounted.
+
 		if not refLayerUp:get() then
 			if not g_noLayerLogged and g_diagLines < DIAG_EPISODE_LINES then
 				g_noLayerLogged = true
@@ -1117,7 +1135,6 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		end
 		g_noLayerLogged = false
 
-		-- Cursor follow (the ring re-renders only when the cursor moved).
 		local hasTerrain = api.gui.mouse.hasTerrainPosition()
 		if not hasTerrain then
 			logNoTerrain(refLmbDown:get())
@@ -1146,7 +1163,6 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			bump()
 		end
 
-		-- Brush samples, throttled by the sample policy.
 		local cur = cursorState:old()
 		local r = radiusState:old()
 		local now = os.clock()
@@ -1155,7 +1171,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			local last = refSample:get()
 			local due = last == nil or last.r ~= r or brush.sampleDue(cur.x - last.x, cur.y - last.y, now - last.at, r)
 			-- A cursor that hasn't moved adds nothing while painting; the hover preview refreshes the
-			-- same spot only when its cache expires (the 100 ms timer would re-take it otherwise).
+			-- same spot only when its cache expires.
 			if due and s ~= nil and last ~= nil and last.r == r and cur.x == last.x and cur.y == last.y
 					and (s.phase == PHASE_PAINTING or now - last.at < HOVER_CACHE_TTL) then
 				due = false
@@ -1195,8 +1211,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			end
 		end
 
-		-- The cost preview is made when a stroke ends (finishStroke), not while painting: it builds one
-		-- proposal per road.
+		-- The cost preview is made when a stroke ends (finishStroke), not while painting. It builds one proposal per road.
+
 		s = refSel:get()
 		-- A commit whose last callback never came: stop waiting on screen.
 		if s ~= nil and s.phase == PHASE_COMMITTING and now - (s.commitAt or now) > COMMIT_TIMEOUT then
@@ -1205,14 +1221,13 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			refResult:set({ text = { head = _("No answer from the game"), detail = _("Check what was upgraded"), severity = "error" }, untilAt = now + RESULT_SECONDS })
 			resetToIdle()
 		end
-		-- Drop the result line when it expires.
+
 		local rl = refResult:get()
 		if rl ~= nil and now >= rl.untilAt then
 			refResult:set(nil)
 			bump()
 		end
 
-		-- Summarise Moved events instead of logging every one.
 		local ml = refMoved:get()
 		if ml.count > 0 and now - ml.lastAt >= MOVED_LOG_INTERVAL then
 			if debugLog() then logMsg("mouse Moved x" .. tostring(ml.count) .. " (with LMB held: " .. tostring(ml.withLmb)
@@ -1284,8 +1299,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			end
 		elseif isRmb and (e.type == T.Pressed or e.type == T.PressedOutside) then
 			-- RMB press: only remember where. RMB Pressed / Released never arrive here, only PressedOutside (press) and
-			-- Clicked (release): the press is taken before the Selector (RMB is bound to the menu's back and cancel
-			-- actions). Pressed is kept in case it arrives.
+			-- Clicked (release): RMB is bound to the menu's back and cancel actions, which take the press before the Selector.
+
 			refRmbPress:set({ x = e.x, y = e.y })
 		elseif isRmb and (e.type == T.Clicked or e.type == T.Released) then
 			-- RMB release: clears the selection, painted or waiting (nothing is removed), unless the
@@ -1318,9 +1333,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		return consume
 	end
 
-	-- The cursor tooltip is minimal: the selection lives in the toolbar status chip.
-	local function tooltipText(s : Selection, r : number) : string
-		local lines : {string} = { string.format("r = %d m", math.floor(r)) }
+	local function tooltipText(s : Selection) : string
+		local lines : {string} = {}
 		if s ~= nil and s.phase == PHASE_PAINTING and s.erasing then
 			lines[#lines + 1] = _("Removing from the selection")
 		elseif s ~= nil and (s.phase == PHASE_PAINTING or s.phase == PHASE_SELECTED) then
@@ -1331,8 +1345,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			lines[#lines + 1] = _("Cancel button stops the progress")
 		end
 		if s ~= nil and s.phase ~= PHASE_COMMITTING then
-			-- Skip reasons stay here (small, for checking the filters); the kept counts are in the chip.
-			for _i, l in ipairs(sel.skipLines(s.stroke)) do lines[#lines + 1] = l end
+			-- The kept counts show in the toolbar chip.
+			for _i, l in ipairs(sel.limitLines(s.stroke)) do lines[#lines + 1] = l end
 			if s.truncated then lines[#lines + 1] = _("Too many objects here, some were ignored") end
 			if DEBUG_OCTREE and s.phase == PHASE_IDLE and s.rawEdges ~= nil then
 				lines[#lines + 1] = string.format("octree at r: %d edges · %d constructions", s.rawEdges, s.rawCons)
@@ -1349,12 +1363,12 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		local _ = versionState:old()   -- re-render on selection changes
 		-- World-layer lifecycle. The menu swaps the action to another entry's (or its "default") when the tool is
 		-- left, which unmounts this layer. An unmount not followed by a mount within LAYER_GONE_SECONDS clears the
-		-- selection (here or in onStep), so a same-frame re-binding never does.
+		-- selection (here or in onStep).
 		react.onMount(function()
 			pcall(function()
 				refLayerUp:set(true)
 				g_layerOwnerId = refInstance:get()
-				g_layerOwnerSetParam = function(p : ConstructionCustomActionParams<BulkBulldozerActionParam>)
+				g_layerOwnerSetParam = function(p : ConstructionCustomActionParams<RubActionParam>)
 					refParam:set(p)
 					refPushedAt:set(os.clock())
 				end
@@ -1406,8 +1420,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			builtin.Selector{
 				filter = function(entity : Engine.Entity) : boolean
 					if entity == nil or entity < 0 then return false end
-					-- Hover effect only where the highlight is (same colours), so an object the
-					-- brush would not take never looks selected.
+					-- Hover effect only where the highlight is (same colours).
+
 					if hl.HOVER_ONLY_HIGHLIGHTED then return refHlSet:get()[entity] == true end
 					return api.engine.entityExists(entity)
 				end,
@@ -1468,12 +1482,13 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 				color = api.type.Vec4f.new(1, 0.7, 0.1, 0.8)
 			end
 			for _, v in ipairs(ringEdges(cur.x, cur.y, r, color)) do bag[#bag + 1] = v end
-			-- the base tooltip recipe, where this platform has it; else no tooltip (the status chip shows the same
-			-- counts)
-			if type((constructionUi as {string : any}).SimpleTooltipRecipe) == "function" then
+			-- the base tooltip recipe, where this platform has it; else no tooltip
+
+			local tooltip = tooltipText(s)
+			if tooltip ~= "" and type((constructionUi as {string : any}).SimpleTooltipRecipe) == "function" then
 				children[#children + 1] = builtin.ActionTooltip{
 					recipe = constructionUi.SimpleTooltipRecipe,
-					param = { message = { message = tooltipText(s, r) } },
+					param = { message = { message = tooltip } },
 				}
 			end
 		end
@@ -1483,8 +1498,8 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			local layer = undergroundLayer(undergroundOn)
 			if layer ~= nil then children[#children + 1] = layer end
 		end
-		-- Only ONE EdgeRenderable per recipe: the engine asserts on more, so the ring and the selection overlay share
-		-- it.
+		-- Only ONE EdgeRenderable per recipe: the engine asserts on more. The ring and the selection overlay share it.
+
 		if #bag > 0 then
 			children[#children + 1] = builtin.EdgeRenderable{
 				edges = bag,
@@ -1497,7 +1512,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			crosshair = false,
 			terrainCirclePolicy = "Never",
 			highlightedEntities = highlighted,
-			-- Back (ESC) clears the selection first; otherwise it leaves the tool as before.
+			-- Back (ESC) clears the selection first; otherwise it leaves the tool.
 			onBack = function()
 				logEsc("back")
 				if isCommitting() then cancelUpgrade() elseif hasPending() then cancelPending("back") else param.abort() end
@@ -1508,16 +1523,16 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 		return descriptor
 	end
 
-	-- Keep focus on the tool, as the base selector-based tools do. These and the ESC hooks below only where this
-	-- platform's react has them; a platform check is constant, so the hooks are the same every render.
+	-- These and the ESC hooks below only where this platform's react has them. A platform check is constant, so the
+	-- hooks are the same every render.
 	local reactAny = react as {string : any}
 	if type(reactAny.setForceFocusable) == "function" then react.setForceFocusable(true) end
 	if type(reactAny.setRestrictMouseFocus) == "function" then react.setRestrictMouseFocus(true) end
 
 	if not param.isActive then return nil end
 	param.setActionFn(actionFn, "BrushUpgradeAction")
-	-- ESC: while something is selected it clears the selection (nothing is changed). Otherwise, in mouse mode, it
-	-- falls through and closes the construction window (useInputAction may be conditional, as the base does there).
+	-- ESC: while something is selected it clears the selection. Otherwise, in mouse mode, it falls through and closes
+	-- the construction window. useInputAction may be conditional here.
 	if (hasPending() or isCommitting()) and type(reactAny.useInputAction) == "function" and type(reactAny.iaHandler) == "function" then
 		react.useInputAction("IA_MENU_BACK", react.iaHandler(function()
 			logEsc("IA_MENU_BACK")
@@ -1527,13 +1542,13 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 	return nil
 end))
 
--- Toolbar status chip: the content of a disabled one-value Button (makeCompactButtonFn below). A recipe as button
--- content is base practice; it returns a BoxLayout (a recipe child must be a layout) and re-renders itself, since the
--- menu re-renders a param only when its value or definition changes. Two TextViews, not a direct TextView child of
--- the button: the bar fixes those to 50 x 24 px.
+-- Toolbar status chip: the content of a disabled one-value Button (makeCompactButtonFn below). It returns a
+-- BoxLayout (a recipe child must be a layout) and re-renders itself: the menu re-renders a param only when its value
+-- or definition changes. The bar fixes a direct TextView child of the button to 50 x 24 px.
+
 local record StatusParam end
 local StatusChip = react.RegisterRecipe("BrushUpgradeStatus", perf:wrap("status_render", function(_param : StatusParam) : TreeNodeId
-	local textState = react.useState({ head = g_status.head, detail = g_status.detail, severity = g_status.severity, hint = g_status.hint, tail = g_status.tail, tailSeverity = g_status.tailSeverity }) as ReactStateT<BulkBulldozerStatusText>
+	local textState = react.useState({ head = g_status.head, detail = g_status.detail, severity = g_status.severity, hint = g_status.hint, tail = g_status.tail, tailSeverity = g_status.tailSeverity }) as ReactStateT<RubStatusText>
 	local refSeen = react.useRef(g_status.version) as ReactRefT<integer>
 	local function take(ev : StatusEvent)
 		local old = textState:old()
@@ -1577,8 +1592,8 @@ local StatusChip = react.RegisterRecipe("BrushUpgradeStatus", perf:wrap("status_
 		children = lines,
 	}
 end))
--- Button label wrapped in a BoxLayout, so the bar's 50 px TextView rule doesn't clip it; the BoxLayout is centred by
--- the base style.
+-- Button label in a BoxLayout; the bar's 50 px TextView rule clips a direct TextView. The base style centres the
+-- BoxLayout.
 local function buttonLabel(label : string) : TreeNodeId
 	return builtin.BoxLayout{
 		orientation = builtin.type.Orientation.Horizontal,
@@ -1586,8 +1601,8 @@ local function buttonLabel(label : string) : TreeNodeId
 	}
 end
 
--- The label of the Clear button, in the warning colour of the theme (yellow), so it stands out from the blue Upgrade
--- button: "Cancel" while an upgrade runs, "Clear" otherwise. It follows the status event like the chip does.
+-- The label of the Clear button, in the warning colour of the theme (yellow): "Cancel" while an upgrade runs,
+-- "Clear" otherwise. It follows the status event like the chip does.
 local ClearLabel = react.RegisterRecipe("BrushUpgradeClearLabel", function(_param : StatusParam) : TreeNodeId
 	local runState = react.useState(g_status.running == true) as ReactStateT<boolean>
 	local refSeen = react.useRef(g_status.version) as ReactRefT<integer>
@@ -1656,7 +1671,7 @@ local Ret = {
 			},
 			{
 				-- [Upgrade] [Clear]: two one-value Buttons with hideLabel in one `group` render side by side. Every click
-				-- runs onChangeFn, even when the value is unchanged. No oldValue guard on purpose.
+				-- runs onChangeFn, even when the value is unchanged.
 				key = KEY_UPGRADE,
 				name = _("Upgrade"),
 				tooltip = _("Upgrade every selected (highlighted) road. There is no undo."),
@@ -1668,7 +1683,7 @@ local Ret = {
 				yearFrom = 0,
 				yearTo = 0,
 				location = api.type.enum.ScriptParamLocation.Toolbar,
-				-- Label in a BoxLayout: unclipped.
+
 				makeCompactButtonFn = function(_value : number) : TreeNodeId
 					return buttonLabel(_("Upgrade"))
 				end,
@@ -1702,7 +1717,7 @@ local Ret = {
 			{
 				-- Status chip under the buttons: a one-value Button kept "Disabled" (not clickable) whose content is the
 				-- self-updating BrushUpgradeStatus recipe. Its own group (GROUP_INFO): brush_upgrade.css.lua turns the
-				-- grey button into plain left-aligned text, the Smart Lanes info style.
+				-- grey button into plain left-aligned text.
 				key = KEY_STATUS,
 				name = _("Selection"),
 				tooltip = _("What is selected. Right-click or Clear empties the selection."),
@@ -1745,9 +1760,9 @@ local Ret = {
 			end
 		end
 		logMsg(string.format("toolbar built; remembered radius %s, options %s", tostring(g_radius), paramsToString(g_toolParams)))
-		-- One panel: every param sits in the toolbar on the left, in this order: radius, underground, the road options,
-		-- the progress, the Upgrade and Clear buttons. The menu shows the params of the default
-		-- location in a second window, which this tool does not use.
+		-- Every param is placed in the toolbar, in this order: radius, underground, the road options, the status chip,
+		-- the Upgrade and Clear buttons. The menu shows the params of the default location in a second window.
+
 		local function rank(key : string) : integer
 			if key == KEY_RADIUS then return 1 end
 			if key == "undergroundMode" then return 2 end
@@ -1771,16 +1786,16 @@ local Ret = {
 		params = ordered		return {
 			resName = constructionDefinition,
 			name = _("Road Upgrade Brush"),
-			description = _("Upgrade roads with a brush: paint over the roads to select them, then press \"Upgrade\". \"Clear\", right-click or Esc clears the selection."),
+			description = _("Upgrade roads with a brush: paint over the roads to select them, then press \"Upgrade\". \"Clear\", right-click or Esc clears the selection. One-way road types are not offered."),
 			icon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/brush_tool.tga" },
 			previewIcon = { icon = "kacsa_road_upgrade_brush::/gui/road_upgrade_brush/brush_tool_preview.tga" },
 			availability = { yearFrom = 0, yearTo = 0 },
 			action = "ACTION_CUSTOM",
-			customAction = makeCustomAction(BulkBulldozerAction),
+			customAction = makeCustomAction(RubAction),
 			constructions = {},
 			categories = {},
 			params = params,
-			-- Order below the first year-gated entry so isActionActive(listIndex) matches.
+			-- The order must stay below the first year-gated entry for isActionActive(listIndex) to match.
 			menuCategory = {
 				categories = {
 					{ category = "roads_tools", order = 5 },

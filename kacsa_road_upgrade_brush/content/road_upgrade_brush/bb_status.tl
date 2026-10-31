@@ -1,17 +1,13 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Toolbar status: the selection is shown in the construction options bar as a status chip instead of the cursor
--- tooltip. PURE: no api.* calls (money is formatted by the caller).
+-- Pure: no api.* calls (money is formatted by the caller).
 
-local status : BulkBulldozerStatus = {}
+local status : RubStatus = {}
 
--- The bar is 314 UI px wide with 8 px padding and the button adds 8 px padding per side, so ~280 px for text: about
--- 36 body-font characters. Longer lines are clipped here (with "...") rather than cut by the engine.
--- Width is counted per character, CJK / Hangul / full-width glyphs as 2 (status.width), so
--- translated lines clip at the same pixel width as English ones.
+-- About 280 px of text fit the bar: 36 body-font columns. status.width counts CJK, Hangul and full-width glyphs as 2.
 status.MAX_CHARS = 36
 status.MAX_KIND_PARTS = 3
 
--- Display order. Translated at use time (GUI script: _() translates when called).
+-- _() translates when called (GUI script).
 local KIND_ORDER : {string} = { "road", "track", "station", "asset", "town_building" }
 local function kindFormats() : {string : {string}}
 	return {
@@ -27,9 +23,9 @@ local function counted(n : integer, formats : {string}) : string
 	return string.format(n == 1 and formats[1] or formats[2], n)
 end
 
--- Display width of the UTF-8 character that starts with byte b (and its byte length):
--- ASCII, Latin, Cyrillic and general punctuation (U+0000-U+2FFF) count 1, everything from
--- U+3000 (CJK, kana, Hangul, full-width forms) counts 2.
+-- Display width and byte length of the UTF-8 character that starts with byte b.
+-- U+0000-U+2FFF (ASCII, Latin, Cyrillic, general punctuation) count 1. From U+3000 (CJK, kana, Hangul, full-width
+-- forms) count 2.
 local function charInfo(b : integer) : integer, integer
 	if b < 0x80 then return 1, 1 end
 	if b < 0xE0 then return 2, 1 end
@@ -52,7 +48,6 @@ end
 function status.clip(s : string, n : integer) : string
 	if s == nil then return "" end
 	if status.width(s) <= n then return s end
-	-- Keep whole characters up to n - 3 columns, then "...". Never cut inside a UTF-8 sequence.
 	local budget = n - 3
 	local w, i = 0, 1
 	while i <= #s do
@@ -64,8 +59,8 @@ function status.clip(s : string, n : integer) : string
 	return string.sub(s, 1, i - 1) .. "..."
 end
 
--- Skip reasons and refusals: the commit stores them as English text (also used in the log), or
--- as the game's own (already translated) error message. Known ones are translated for display.
+-- The commit stores reasons as English text or as the game's already translated error message. Known ones are
+-- translated here.
 local function reasonLabels() : {string : string}
 	return {
 		["gone"] = _("gone"),
@@ -110,7 +105,7 @@ function status.kindSummary(kindCounts : {string : integer}, objects : integer) 
 	return table.concat(parts, " · ")
 end
 
-local function text(head : string, detail : string, severity? : string, hint? : string) : BulkBulldozerStatusText
+local function text(head : string, detail : string, severity? : string, hint? : string) : RubStatusText
 	return {
 		head = status.clip(head, status.MAX_CHARS), detail = status.clip(detail, status.MAX_CHARS), severity = severity,
 		hint = hint ~= nil and status.clip(hint, status.MAX_CHARS) or nil,
@@ -121,19 +116,18 @@ local function hintPaint() : string
 	return _("Paint with the left mouse button")
 end
 
-function status.idle() : BulkBulldozerStatusText
+function status.idle() : RubStatusText
 	return text(_("Nothing selected"), hintPaint())
 end
 
--- Width of the text progress bar in the chip while roads are upgraded.
+-- In characters.
 local PROGRESS_BAR_WIDTH <const> = 10
 
--- The third line while roads are upgraded: Esc may close the tool, the Cancel button stops the upgrade and keeps it open.
 local function stopHint() : string
 	return _("Cancel button stops the progress")
 end
 
-function status.lines(v : BulkBulldozerStatusInput) : BulkBulldozerStatusText
+function status.lines(v : RubStatusInput) : RubStatusText
 	local n = v.count or 0
 	local kinds = status.kindSummary(v.kindCounts, v.objects)
 	if v.phase == "committing" then
@@ -170,9 +164,8 @@ function status.lines(v : BulkBulldozerStatusInput) : BulkBulldozerStatusText
 	return status.idle()
 end
 
--- The end of a run: "X updated, Y failed". Green when something was updated, red when nothing was and some roads
--- failed; with both, the head is green and "Y failed" is yellow, as its own part (tail). The cost is added by the tool.
-function status.resultLines(r : BulkBulldozerCommitResult) : BulkBulldozerStatusText
+-- The tool adds the cost.
+function status.resultLines(r : RubCommitResult) : RubStatusText
 	if r.removed == 0 and r.refused ~= nil then
 		return text(_("Nothing upgraded"), status.reasonLabel(r.refused), "error")
 	end
@@ -211,7 +204,7 @@ function status.resultLines(r : BulkBulldozerCommitResult) : BulkBulldozerStatus
 	end
 	return result
 end
-function status.oneLine(t : BulkBulldozerStatusText) : string
+function status.oneLine(t : RubStatusText) : string
 	if t == nil then return "" end
 	return t.head .. " / " .. t.detail
 end

@@ -1,13 +1,13 @@
--- Options of the brush tool: the menu params of the rub_options module (copied from Road Upgrade All in One) without the one-way
--- road types. The underground button (key undergroundMode) is the base game's. The rules and templates are the rub_rules and rub_templates modules.
+-- Options of the brush tool: the menu params of the rub_options module without the one-way road types.
+-- The underground button (key undergroundMode) is the base game's.
 
-local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RusConfig
-local options = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_options.tl" as RusOptions
-local rules = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_rules.tl" as RusRules
+local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig
+local options = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_options.tl" as RubOptions
+local rules = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_rules.tl" as RubRules
 local builtin = ug_require "::/gui/main/builtin.lua" as Builtin
-local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as BrushStyle
+local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as RubStyle
 
-local brushOptions : BrushOptions = {}
+local brushOptions : RubBrushOptions = {}
 
 local ROAD_TYPE_KEY <const> = "rub_roadType"
 local PROBLEM_KEY_PREFIX <const> = "rub_problem_"
@@ -20,12 +20,11 @@ local CHECKBOX_NO <const> = 1
 local UNDERGROUND_KEY <const> = "undergroundMode"
 local UNDERGROUND_YES <const> = 1
 
-local function isOneWay(roadType : RusRoadType) : boolean
+local function isOneWay(roadType : RubRoadType) : boolean
 	return string.find(roadType.name, ONE_WAY_MARK, 1, true) ~= nil
 end
 
--- The brush offers the two-way road types. config.lua lists them before the one-way ones, so their
--- index in the combo box is their index in config.roadTypes.
+-- config.roadTypes lists the two-way road types before the one-way ones. A combo box index is an index in config.roadTypes.
 local function offeredRoadTypes() : integer
 	local count = 0
 	for _, roadType in ipairs(config.roadTypes) do
@@ -39,7 +38,7 @@ local function removeBuildingsParam() : ConstructionMenuParam
 	return {
 		key = REMOVE_BUILDINGS_KEY,
 		name = _("Remove buildings in the way"),
-		tooltip = _("Buildings that block the new road are demolished, as with the single-click tool. A placed asset that blocks the road is removed on the first retry, and the last retry forces the build. Off: such roads are skipped."),
+		tooltip = _("Buildings that block the new road are demolished. A placed asset that blocks the road is removed on the first retry, and the last retry forces the build. Off: such roads are skipped."),
 		values = { _("No"), _("Yes") },
 		defaultIndex = 2,
 		uiType = api.type["enum"].ScriptParamType.CheckBox,
@@ -49,7 +48,7 @@ local function removeBuildingsParam() : ConstructionMenuParam
 	}
 end
 
--- Tunnels have no alley trees and no noise barriers: with the underground button on, the two boxes are disabled.
+-- Tunnels have no alley trees and no noise barriers.
 local function disabledUnderground(param : ConstructionMenuParam)
 	local inner = param.checkEnabledFn
 	param.checkEnabledFn = function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
@@ -59,7 +58,6 @@ local function disabledUnderground(param : ConstructionMenuParam)
 	end
 end
 
--- A note about an impossible combination: the text in red, as plain wrapped text like the status chip.
 local function errorNote(param : ConstructionMenuParam, noteGroup : string)
 	local message = param.values[1]
 	param.group = noteGroup
@@ -95,7 +93,7 @@ function brushOptions.params(noteGroup : string) : {ConstructionMenuParam}
 	return result
 end
 
-function brushOptions.extras(params : {string : number}) : BrushExtras
+function brushOptions.extras(params : {string : number}) : RubExtras
 	local choices = options.fromParams(params or {})
 	return { busLane = choices.busLane, tram = choices.tram, catenary = choices.catenary, lock = choices.lock }
 end
@@ -106,12 +104,11 @@ end
 
 function brushOptions.template(params : {string : number}) : string, string
 	local choices = options.fromParams(params or {})
-	-- a tunnel has neither alley trees nor noise barriers, whatever the two boxes show
 	if choices.underground then
 		choices.trees = false
 		choices.barrier = false
 	end
-	-- the menu remembers values by key, so a remembered road type can lie outside the offered ones
+	-- The menu remembers values by key: a remembered road type can lie outside the offered ones.
 	if choices.roadType > offeredRoadTypes() then
 		return nil, _("Choose a road type")
 	end

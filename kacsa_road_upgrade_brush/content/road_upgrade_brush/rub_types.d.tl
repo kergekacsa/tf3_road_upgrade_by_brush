@@ -1,25 +1,22 @@
--- Types of the road upgrade modules. Declarations only; nothing here runs in the game.
--- Every global name is prefixed Rus (globals are shared by all loaded mods).
+-- Global names use the prefix Rub: globals are shared by all loaded mods.
 
---- A road type of the tool and the vanilla street template bases it uses.
-global record RusRoadType
+global record RubRoadType
 	name : string
 	bases : {string}
 	country : boolean
 end
 
-global record RusConfig
-	roadTypes : {RusRoadType}
+global record RubConfig
+	roadTypes : {RubRoadType}
 	TreesSuffix : string
 	BarriersSuffix : string
 end
 
-global record RusTemplates
-	resolve : function(roadType : RusRoadType, suffix : string, year : integer) : string
+global record RubTemplates
+	resolve : function(roadType : RubRoadType, suffix : string, year : integer) : string
 end
 
---- The options chosen in the tool menu.
-global record RusChoices
+global record RubChoices
 	roadType : integer
 	busLane : boolean
 	tram : boolean
@@ -31,7 +28,7 @@ global record RusChoices
 	underground : boolean
 end
 
-global record RusRules
+global record RubRules
 	enum Problem
 		"treesAndBarrier"
 		"treesCountry"
@@ -39,15 +36,11 @@ global record RusRules
 		"busTramLanes"
 	end
 
-	targetTemplate : function(choices : RusChoices, year : integer) : string
-	check : function(choices : RusChoices, year : integer) : {RusRules.Problem}
+	targetTemplate : function(choices : RubChoices, year : integer) : string
+	check : function(choices : RubChoices, year : integer) : {RubRules.Problem}
 end
 
-global record RusOptions
-	fromParams : function(params : {string : number}) : RusChoices
+global record RubOptions
+	fromParams : function(params : {string : number}) : RubChoices
 	params : function() : {ConstructionMenuParam}
-end
-
-global record RusAction
-	install : function(toolResName : ResName)
 end

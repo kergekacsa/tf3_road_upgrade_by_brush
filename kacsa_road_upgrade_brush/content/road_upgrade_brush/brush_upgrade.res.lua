@@ -1,4 +1,3 @@
--- Brush upgrade tool in the road tools menu, see brush_upgrade.script.tl.
 function data()
 	return {
 		type = "construction_tool",

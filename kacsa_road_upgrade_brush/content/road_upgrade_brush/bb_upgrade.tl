@@ -1,30 +1,26 @@
 -- Upgrade step of the brush tool (API layer, GUI thread only). It builds one street template proposal per
 -- road with replaceSegment and sends the proposals one after the other. It sends ignoreErrors = true only for the last
 -- retry of a road that nothing but asset groups blocks.
--- Every road is checked against the hard rules again on fresh engine reads right before its command,
--- because the commands before it may have changed the street network. A road that already is the target
--- is left alone. A road whose command fails is tried again, twice, after all the others.
+-- Every road is checked against the hard rules on fresh engine reads right before its command.
+-- A road that already is the target is left alone. A road whose command fails is tried again, twice, after all the others.
 
-local gather = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_gather.tl" as BulkBulldozerGather
-local sel = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_select.tl" as BulkBulldozerSelect
-local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as ProposalProbe
+local gather = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_gather.tl" as RubGather
+local sel = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_select.tl" as RubSelect
+local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as RubProposalProbe
 
-local upgrade : BulkBulldozerCommit = {}
+local upgrade : RubCommit = {}
 
--- One command per road, so a press never needs more commands than the selection cap.
+-- One command per road: a press sends at most as many commands as the selection cap.
 upgrade.MAX_COMMANDS = sel.STROKE_CAP
 
 local REFUSED_BY_GAME <const> = "refused by the game"
 local EXTRAS_NOT_APPLIED <const> = "bus lane or lock could not be set"
 
--- Pause after each command before the next one is built and sent: the game still works on the world change
--- of a command when its callback runs, and the next proposal reads that state.
+-- Pause in seconds after each command: the game still works on the world change of a command when its callback runs.
 local COMMAND_GAP <const> = 0.1
 
--- Failed roads are tried again this many times, each time after all the others.
 local RETRY_PASSES <const> = 2
 
--- Set once the segment of the first proposal of a press is in the log.
 local segmentLogged = false
 
 local pendingStep : function() = nil
@@ -50,12 +46,12 @@ local REASON_TEXT : {string : string} = {
 	tram_only = "tram track",
 }
 
--- Hard rules only: the toolbar filters were applied when the road was selected.
-local ALL_FILTERS : BulkBulldozerFilters = {
+-- Hard rules only: the toolbar filters do not apply here.
+local ALL_FILTERS : RubFilters = {
 	roads = true, tracks = true, stations = true, assets = true, townBuildings = true, underground = true, surface = true,
 }
 
--- Runs the next step of a running commit once the pause is over. The tool recipe calls it on every step.
+-- Runs the next step once the pause is over. The tool recipe calls it on every step.
 function upgrade.tick()
 	if pendingStep ~= nil and os.clock() >= pendingDueAt then
 		local step = pendingStep
@@ -69,8 +65,7 @@ local function afterGap(step : function())
 	pendingDueAt = os.clock() + COMMAND_GAP
 end
 
--- The context of a player-initiated build, as the base game builds it. gatherBuildings and gatherFields
--- let the proposal demolish the buildings and fields that block the new road.
+-- gatherBuildings and gatherFields let the proposal demolish the buildings and fields that block the new road.
 local function makeContext(removeBuildings : boolean) : Context
 	local c = api.type.Context.new()
 	c.gatherBuildings = removeBuildings
@@ -83,7 +78,7 @@ local function makeContext(removeBuildings : boolean) : Context
 	return c
 end
 
-function upgrade.assertHardRules(edges : {integer}, ctx : BulkBulldozerContext,
+function upgrade.assertHardRules(edges : {integer}, ctx : RubContext,
 		industryRoads : {integer : boolean}) : {integer}, {integer : string}
 	local cache = gather.newCache()
 	for k, v in pairs(industryRoads or {}) do if v then cache.industryRoads[k] = true end end
@@ -107,7 +102,7 @@ function upgrade.assertHardRules(edges : {integer}, ctx : BulkBulldozerContext,
 end
 
 -- The edge decorations (alley trees, noise barriers) a template brings when a road is newly built.
--- replaceSegment keeps the decorations of the old road, so they are put on the new segment here.
+-- replaceSegment keeps the decorations of the old road.
 local function templateDecorations(template : string) : {{integer, boolean}}
 	local result : {{integer, boolean}} = {}
 	local templateId = api.res.streetTemplateRep.find(template)
@@ -127,7 +122,7 @@ local function decorationCount(p : Proposal) : integer
 	return n
 end
 
--- Writes back at every level: the getters may hand out copies.
+-- The getters may hand out copies: it writes back at every level.
 local function applyDecorations(p : Proposal, decorations : {{integer, boolean}})
 	local street = p.proposal
 	local segments = street.addedSegments
@@ -140,8 +135,7 @@ local function applyDecorations(p : Proposal, decorations : {{integer, boolean}}
 	p.proposal = street
 end
 
--- The first and the last lane that carries vehicles (neither people nor cargo): the outermost driving lane on each
--- side. The single-click tool puts its bus lane and tram track on these lanes.
+-- The first and the last lane that carries vehicles (neither people nor cargo): the outermost driving lane on each side.
 local function outerVehicleLanes(lanes : {LaneConfig}) : {integer}
 	local modes = api.type["enum"].TransportMode
 	local vehicle : {integer} = {}
@@ -154,11 +148,11 @@ local function outerVehicleLanes(lanes : {LaneConfig}) : {integer}
 	return { vehicle[1], vehicle[#vehicle] }
 end
 
-local function anyExtras(extras : BrushExtras) : boolean
+local function anyExtras(extras : RubExtras) : boolean
 	return extras.busLane or extras.tram or extras.lock
 end
 
-local function extrasText(extras : BrushExtras) : string
+local function extrasText(extras : RubExtras) : string
 	local on : {string} = {}
 	if extras.busLane then on[#on + 1] = "bus lane" end
 	if extras.tram then on[#on + 1] = extras.catenary and "tram with catenary" or "tram" end
@@ -166,7 +160,7 @@ local function extrasText(extras : BrushExtras) : string
 	return #on > 0 and table.concat(on, ", ") or "none"
 end
 
--- The lane's transport modes as "2+3" (numbers of the TransportMode values that are on).
+-- The lane's transport modes that are on, as "2+3" (TransportMode numbers).
 local function modesText(lane : LaneConfig) : string
 	local on : {string} = {}
 	for mode, enabled in pairs(lane.transportModes or {}) do
@@ -186,7 +180,6 @@ local function modeNumber(mode : any) : integer
 	return math.floor(tonumber(tostring(mode)) or -1)
 end
 
--- The mode numbers that are on in a lane.
 local function modeSet(lane : LaneConfig) : {integer : boolean}
 	local on : {integer : boolean} = {}
 	for mode, enabled in pairs(lane.transportModes or {}) do
@@ -208,13 +201,12 @@ local function sameSet(a : {integer : boolean}, b : {integer : boolean}) : boole
 	return true
 end
 
--- The bus lane, tram track and catenary of the single-click tool, put on the new segments: the game's own proposal for
--- them differs from the plain one in the transport modes of the outer driving lanes (bus lane: no car; tram track: the
--- tram; catenary: the electric tram) and, with the lock, in the lock flag of the segment. Writes back at every level:
--- the getters may hand out copies. The lanes are read back from the proposal and compared with what was meant; the
--- result is false when they differ, and the proposal must not be sent: lanes with wrong modes can stop the game in its
--- transport network.
-local function applyExtras(p : Proposal, extras : BrushExtras) : boolean, string
+-- The bus lane, tram track and catenary of Road Upgrade All in One, put on the new segments. They differ from the plain
+-- proposal in the transport modes of the outer driving lanes (bus lane: no car; tram track: the tram; catenary: the
+-- electric tram) and, with the lock, in the lock flag of the segment. The getters may hand out copies: it writes back
+-- at every level. The result is false when the lanes read back from the proposal differ from the meant ones. Such a
+-- proposal MUST NOT be sent: lanes with wrong modes can stop the game in its transport network.
+local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
 	local modes = api.type["enum"].TransportMode
 	local car = modeNumber(modes.CAR)
 	local bus = modeNumber(modes.BUS)
@@ -279,8 +271,7 @@ local ALL_MODE_NAMES : {string} = {
 	"SMALL_AIRCRAFT", "SMALL_SHIP", "HELICOPTER", "TRAM_TRACK", "ELECTRIC_TRAM_TRACK",
 }
 
--- The mode numbers that are on in a lane, read by asking for every mode. This works for the lanes of a road and for
--- the lanes of a street template alike.
+-- The mode numbers that are on in a lane, read by asking for every mode. Works for the lanes of a road and of a street template.
 local function modeSetOf(lane : LaneConfig) : {integer : boolean}
 	local modes = api.type["enum"].TransportMode as any as {string : any}
 	local have = lane.transportModes as any as {any : boolean}
@@ -294,7 +285,7 @@ end
 
 -- The modes the outer driving lanes of a road with the street template and the extras have, per lane index, and the
 -- number of lanes. nil when the template is unknown.
-local function templateOuterModes(template : string, extras : BrushExtras) : {integer : {integer : boolean}}, integer
+local function templateOuterModes(template : string, extras : RubExtras) : {integer : {integer : boolean}}, integer
 	local id = api.res.streetTemplateRep.find(template)
 	if id < 0 then return nil, 0 end
 	local modes = api.type["enum"].TransportMode
@@ -313,9 +304,8 @@ local function templateOuterModes(template : string, extras : BrushExtras) : {in
 end
 
 -- Whether a road already is what the template and the extras make of it: the outer driving lanes have exactly the
--- modes meant (so a road with a tram track or a bus lane is not the target when the option is off), and the lock is
--- set when it is asked for. The lock is never taken off.
-local function carriesExtras(comp : Engine.Component.BaseEdge, template : string, extras : BrushExtras) : boolean
+-- modes meant, and the lock is set when it is asked for. The lock is never taken off.
+local function carriesExtras(comp : Engine.Component.BaseEdge, template : string, extras : RubExtras) : boolean
 	if extras.lock and not comp.roadDevelopmentLocked then return false end
 	local want, count = templateOuterModes(template, extras)
 	if want == nil then return true end
@@ -327,7 +317,7 @@ local function carriesExtras(comp : Engine.Component.BaseEdge, template : string
 	return true
 end
 -- The proposal that replaces the road with the template, and one log line about it.
-local function proposalOf(edge : integer, template : string, decorations : {{integer, boolean}}, extras : BrushExtras) : Proposal, string, string
+local function proposalOf(edge : integer, template : string, decorations : {{integer, boolean}}, extras : RubExtras) : Proposal, string, string
 	local ok, p = pcall(api.engine.util.proposal.replaceSegment, edge, template)
 	if not ok or p == nil then return nil, "replaceSegment failed: " .. tostring(p), nil end
 	local summary = ""
@@ -379,7 +369,7 @@ local function messagesOf(data : WorldBuildProposalCommandData) : {string}
 	return out
 end
 
--- What the game says the proposal collides with (entity ids only; they are not looked up).
+-- What the game says the proposal collides with, as entity ids only.
 local function collisionText(data : WorldBuildProposalCommandData, own : integer) : string
 	local parts : {string} = {}
 	pcall(function()
@@ -421,7 +411,6 @@ local function assetGroupsOf(data : WorldBuildProposalCommandData, own : integer
 	return found, onlyAssets and #found > 0
 end
 
--- Adds entities to the list of entities that the proposal removes.
 local function addToRemove(p : Proposal, ids : {integer})
 	local list : {integer} = {}
 	local seen : {integer : boolean} = {}
@@ -448,7 +437,7 @@ end
 
 -- Whether the road already is what the upgrade would make it: the template, and the decorations when
 -- the template brings its own.
-local function isAlreadyTarget(edge : integer, template : string, decorations : {{integer, boolean}}, extras : BrushExtras) : boolean
+local function isAlreadyTarget(edge : integer, template : string, decorations : {{integer, boolean}}, extras : RubExtras) : boolean
 	local ok, same = pcall(function() : boolean
 		local comp = api.engine.getComponent(edge, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
 		if comp == nil or normalized(comp.roadTemplate) ~= normalized(template) then return false end
@@ -467,7 +456,7 @@ local function isAlreadyTarget(edge : integer, template : string, decorations : 
 	return ok and same == true
 end
 
--- Simulation speed (0 = paused) and number of simulation updates for the log: the game works on the world
+-- Simulation speed (0 = paused) and number of simulation updates, for the log. The game works on the world
 -- changes of a command during its simulation updates, which do not run while the game is paused.
 local function simulationText() : string
 	local ok, text = pcall(function() : string
@@ -480,9 +469,8 @@ local function simulationText() : string
 	return "simulation unknown"
 end
 
--- The game must be paused while the commands run: with the game running, the simulation moves vehicles on the roads
--- that a command replaces, and the game can crash in that case. The commit pauses the game itself (speed 0) and sets
--- the old speed back when it is done.
+-- The game MUST be paused while the commands run: the simulation moves vehicles on the roads that a command
+-- replaces, and the game can crash. The commit pauses the game (speed 0) and sets the old speed back when it is done.
 local PAUSE_NOTE <const> = "Pause the game first"
 
 -- Speed the game ran at before this module paused it; nil when it did not pause the game.
@@ -539,9 +527,8 @@ local function describeRoad(edge : integer) : string
 end
 upgrade.describeRoad = describeRoad
 
--- makeProposalData rejects the proposal replaceSegment returns, so the cost is known only after the
--- road is upgraded (commit's result).
-function upgrade.preview(_edges : {integer}, _template : string) : BulkBulldozerPreview
+-- makeProposalData rejects the proposal replaceSegment returns: the cost is known only from the commit's result.
+function upgrade.preview(_edges : {integer}, _template : string) : RubPreview
 	return { ok = false, cost = nil, critical = false, errors = {}, seconds = 0 }
 end
 
@@ -554,16 +541,16 @@ local function reasonsText(r : {string : integer}) : string
 	return table.concat(parts, ", ")
 end
 
-function upgrade.commit(edges : {integer}, template : string, extras : BrushExtras, removeBuildings : boolean, ctx : BulkBulldozerContext,
-		industryRoads : {integer : boolean}, onDone : function(BulkBulldozerCommitResult), logFn : function(string),
+function upgrade.commit(edges : {integer}, template : string, extras : RubExtras, removeBuildings : boolean, ctx : RubContext,
+		industryRoads : {integer : boolean}, onDone : function(RubCommitResult), logFn : function(string),
 		onRoad : function(integer, boolean, integer, integer, integer))
 	local t0 = os.clock()
 	segmentLogged = false
 	extras = extras or { busLane = false, tram = false, catenary = false, lock = false }
-	pendingStep = nil   -- a commit that was left unfinished (tool closed) must not continue inside this one
+	pendingStep = nil   -- an unfinished commit (tool closed) must not continue
 	local logLine = logFn or function(_s : string) end
 	edges = edges or {}
-	local res : BulkBulldozerCommitResult = {
+	local res : RubCommitResult = {
 		requested = #edges, removed = 0, unchanged = 0, failed = {}, skipped = 0, reasons = {}, commands = 0,
 		refused = nil, cost = nil, seconds = 0,
 	}
@@ -657,7 +644,6 @@ function upgrade.commit(edges : {integer}, template : string, extras : BrushExtr
 	logLine(string.format("upgrade: %d roads, template %s, extras: %s, %d default decorations, remove buildings %s, %s",
 		#queue, template, extrasText(extras), #decorations, tostring(removeBuildings), simulationText()))
 
-	-- Roads whose command failed in the current pass, with the game's reason.
 	local failed : {integer} = {}
 	local failedReason : {integer : string} = {}
 	local function fail(e : integer, reason : string)
@@ -670,8 +656,8 @@ function upgrade.commit(edges : {integer}, template : string, extras : BrushExtr
 	local pauseFailed = false
 
 	-- Roads whose command failed with "Collision" and where only asset groups are in the way: road -> asset groups.
-	-- The first retry puts them in the removal list of the proposal; the second retry also sends it with ignoreErrors,
-	-- as the Build Anyway mod does. Both need the option "Remove buildings in the way".
+	-- The first retry puts them in the removal list of the proposal; the second retry also sends it with ignoreErrors.
+	-- Both need the option "Remove buildings in the way".
 	local assetBlockers : {integer : {integer}} = {}
 
 	-- One road: nothing for a road that already is the target; else its command, sent while the game is paused.
@@ -805,8 +791,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : BrushExtr
 		end
 	end
 
-	-- Some commands fail only because of the state the earlier commands left: the failed roads go through
-	-- the queue again, up to RETRY_PASSES times, each time after all the others.
+	-- The failed roads go through the queue again, up to RETRY_PASSES times, each time after all the others.
 	local function afterPass(attempt : integer)
 		if pauseFailed then
 			-- a retry cannot work without a paused game

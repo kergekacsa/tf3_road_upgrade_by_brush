@@ -1,25 +1,21 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Brush geometry: the ring, the sample points, and the edge-touches-circle test (Hermite sampling), point-in-circle,
--- and the query margin. PURE: no api.* calls; the terrain lookup is passed in.
+-- Pure: no api.* calls.
 
-local brush : BulkBulldozerBrush = {}
+local brush : RubBrush = {}
 
--- Twelve radius steps (metres), default 20, at most 200 to bound the query cost.
+-- Radius steps in metres.
 brush.RADII = { 5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200 }
 brush.DEFAULT_RADIUS = 20
--- One EdgeRenderable edge per arc; an arc has one height pair (start/end), so 48 arcs let the ring follow hills.
+-- One EdgeRenderable edge per arc; an arc has one start height and one end height.
 brush.RING_ARCS = 48
--- The brush samples when the cursor moved at least radius/4 or 100 ms passed.
+-- SAMPLE_MIN_INTERVAL is in seconds. SAMPLE_MOVE_FRACTION is a fraction of the radius.
 brush.SAMPLE_MIN_INTERVAL = 0.1
 brush.SAMPLE_MOVE_FRACTION = 0.25
--- An edge is hit when its curve, sampled at 9 points, comes within the radius of a brush sample (polyline distance,
--- so a straight edge passing through is exact).
+-- Points per edge curve; the distance test uses the polyline through them.
 brush.EDGE_SAMPLES = 9
--- The octree may test an edge's position instead of its geometry, so an edge is only returned when that point is in
--- the query circle. Querying r + EDGE_MARGIN finds every edge up to 2 * EDGE_MARGIN long either way; the exact touch
--- test then drops the extra hits.
+-- Metres. The octree can return an edge by its position only. A query with radius r + EDGE_MARGIN finds every edge up
+-- to 2 * EDGE_MARGIN long.
 brush.EDGE_MARGIN = 100
--- Cost bound per octree query (a 300 m query over a dense city stays well under this).
 brush.SAMPLE_MAX_ENTITIES = 4000
 
 function brush.radiusLabels() : {string}
@@ -45,11 +41,11 @@ function brush.radiusFromParam(v : number) : number
 end
 
 function brush.ringArcs(cx : number, cy : number, r : number, n : integer,
-		heightAt : function(number, number) : number) : {BulkBulldozerRingArc}
-	local out : {BulkBulldozerRingArc} = {}
+		heightAt : function(number, number) : number) : {RubRingArc}
+	local out : {RubRingArc} = {}
 	if r == nil or r <= 0 or n == nil or n < 1 then return out end
 	local step = 2 * math.pi / n
-	-- n + 1 shared end points; the last one closes the ring at angle 2π (= the first point).
+	-- n + 1 end points; point n + 1 equals point 1.
 	local heights : {number} = {}
 	for i = 0, n - 1 do
 		local a = i * step
@@ -82,8 +78,8 @@ function brush.edgeQueryRadius(r : number) : number
 	return r + brush.EDGE_MARGIN
 end
 
--- Cubic Hermite basis (the engine's edge curve: positions and tangents of both ends).
-function brush.hermite(c : BulkBulldozerCurve, t : number) : number, number
+-- Cubic Hermite curve from the positions and tangents of both ends, as the engine's edge curve.
+function brush.hermite(c : RubCurve, t : number) : number, number
 	local t2 = t * t
 	local t3 = t2 * t
 	local h00 = 2 * t3 - 3 * t2 + 1
@@ -107,10 +103,9 @@ function brush.pointSegmentDistance(px : number, py : number, ax : number, ay : 
 	return math.sqrt(qx * qx + qy * qy)
 end
 
-function brush.curveTouchesCircle(c : BulkBulldozerCurve, cx : number, cy : number, r : number) : boolean
+function brush.curveTouchesCircle(c : RubCurve, cx : number, cy : number, r : number) : boolean
 	if c == nil or r == nil or r < 0 then return false end
-	-- Cheap reject: the curve lies inside the hull of its Bezier control points
-	-- p0, p0 + t0/3, p1 - t1/3, p1, so a circle clear of their bounding box can't touch it.
+	-- The curve lies inside the hull of its Bezier control points p0, p0 + t0/3, p1 - t1/3, p1.
 	local ax, ay = c.p0x + c.t0x / 3, c.p0y + c.t0y / 3
 	local bx, by = c.p1x - c.t1x / 3, c.p1y - c.t1y / 3
 	local minX = math.min(c.p0x, ax, bx, c.p1x)

@@ -1,9 +1,8 @@
 -- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083). Private build, not for publication.
--- Road types of the tool and the vanilla street templates they use.
--- The variants with alley trees / noise barriers are the vanilla templates <base>_trees / <base>_barriers
--- (country roads have no trees variant). One-way streets only exist as new templates (from 1940).
+-- Variants with trees or noise barriers are the vanilla templates <base>_trees and <base>_barriers.
+-- Country roads have no trees variant. One-way streets exist only as new templates (from 1940).
 
-local config : RusConfig = {
+local config : RubConfig = {
 	roadTypes = {
 		{ name = "rub_type_town_small", bases = { "town_new_small", "town_old_small" }, country = false },
 		{ name = "rub_type_town_medium", bases = { "town_new_medium", "town_old_medium" }, country = false },

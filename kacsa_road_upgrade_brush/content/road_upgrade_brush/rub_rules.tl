@@ -1,12 +1,12 @@
 -- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083). Private build, not for publication.
--- Which combinations of the tool options can be applied. A combination with problems is not sent at all.
+-- A combination of options with problems is not applied.
 
-local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RusConfig
-local templates = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_templates.tl" as RusTemplates
+local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig
+local templates = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_templates.tl" as RubTemplates
 
-local rules : RusRules = {}
+local rules : RubRules = {}
 
-local function decorationSuffix(choices : RusChoices) : string
+local function decorationSuffix(choices : RubChoices) : string
 	if choices.trees then
 		return config.TreesSuffix
 	end
@@ -16,12 +16,10 @@ local function decorationSuffix(choices : RusChoices) : string
 	return ""
 end
 
-function rules.targetTemplate(choices : RusChoices, year : integer) : string
+function rules.targetTemplate(choices : RubChoices, year : integer) : string
 	return templates.resolve(config.roadTypes[choices.roadType], decorationSuffix(choices), year)
 end
 
---- The outermost vehicle lanes of the template (both sides) must carry buses, so that a bus lane and tram tracks
---- can be put on the same lane.
 local function outerLanesCarryBuses(resName : string) : boolean
 	local id = api.res.streetTemplateRep.find(resName)
 	if id < 0 then
@@ -45,8 +43,8 @@ local function outerLanesCarryBuses(resName : string) : boolean
 	return true
 end
 
-function rules.check(choices : RusChoices, year : integer) : {RusRules.Problem}
-	local problems : {RusRules.Problem} = {}
+function rules.check(choices : RubChoices, year : integer) : {RubRules.Problem}
+	local problems : {RubRules.Problem} = {}
 	if choices.trees and choices.barrier then
 		problems[#problems + 1] = "treesAndBarrier"
 	end

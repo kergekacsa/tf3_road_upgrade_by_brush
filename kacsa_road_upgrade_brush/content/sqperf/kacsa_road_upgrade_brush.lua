@@ -1,5 +1,5 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- SQPERF: cheap, always-shipped performance instrumentation for square_* mods.
+-- SQPERF: performance instrumentation for square_* mods.
 -- Every mod ships its own copy at content/sqperf/<modId>.lua.
 --
 -- Plain Lua that runs in the game: pre-5.3 only (no //, bit ops, utf8, math.tointeger, goto).
@@ -11,10 +11,7 @@
 --      (inst:phase), and one line when every section named in opts.first finished its first call:
 --        [SQPERF] mod=square_x ctx=gs vm=3f2a phase=init ms=212.4 timer=clock
 --        [SQPERF] mod=square_x ctx=gs vm=3f2a phase=first ms=48.0 scan_a=40.1 scan_b=7.9
---      Each is logged only when its ms is at least INIT_LOG_MS (opts.initMs), because a game script
---      loads in ~16 simulation Lua states per load; with level 3 on (the debug param), always.
---      phase(name, t0, detail, ...) appends a detail (string, or format pattern + args, built only
---      when the line is logged).
+--      Each is logged only when its ms is at least INIT_LOG_MS (opts.initMs); with level 3 on, always.
 --   2. slow-call watchdog (always on): a call longer than the threshold (16 ms GUI-thread contexts,
 --      50 ms simulation / game-script contexts) logs at most one line per section per 60 s,
 --      covering every call since that section's previous line:
@@ -28,10 +25,10 @@
 -- created inside pcall; fallback os.clock (process CPU time, overstates on macOS while other
 -- threads are busy). Clock is safe in every GUI context, including the worker threads ("Main Pool
 -- N") that run react onStepTimer callbacks and hudIconScript functions/recipes, and getTime costs
--- ~0.07 us: time everything.
--- Instruments created with timed = false never read any clock (counts only); kept for a context
--- where a clock is unwanted, not needed for thread safety. This module only calls api.type.Clock,
--- log.message, collectgarbage and api.engine.config.getModParams (gate), never a GUI-only API.
+-- ~0.07 us.
+-- Instruments created with timed = false never read any clock (counts only).
+-- This module only calls api.type.Clock, log.message, collectgarbage and
+-- api.engine.config.getModParams (gate), never a GUI-only API.
 --
 -- Hot path (start/stop/hit/wrap) allocates nothing once a section exists: no tables, closures or
 -- strings. Strings are only built when a line is logged.
@@ -40,7 +37,7 @@ local M = {}
 
 M.VERSION = 4
 -- Slow-call thresholds (ms per single call).
-M.GUI_SLOW_MS = 16 -- one 60 fps frame
+M.GUI_SLOW_MS = 16
 M.SIM_SLOW_MS = 50
 -- At most one slow line per section per this many ms of real time.
 M.RATE_MS = 60000
@@ -48,12 +45,11 @@ M.RATE_MS = 60000
 M.WINDOW_MS = 30000
 -- Level 1: phase / phase=first lines below this many ms are dropped unless level 3 is on.
 M.INIT_LOG_MS = 5
--- Contexts that use GUI_SLOW_MS by default; anything else uses SIM_SLOW_MS.
 M.GUI_CONTEXTS = { gui = true, hud = true, step = true }
 
 local NEG_INF = -math.huge
 
--- Short id of this Lua state: the module table's address (each Lua state loads its own copy).
+-- Short id of this Lua state: the module table's address.
 local vm = string.match(tostring(M), "0x0*(%x+)$") or string.sub(tostring(M), -6)
 vm = string.sub(vm, -6)
 M.vm = vm
@@ -67,7 +63,6 @@ local function emit(msg)
 end
 M.emit = emit
 
--- One Clock per Lua state, created on the first timed instrument.
 local clock, clockTried = nil, false
 
 local function clockNow()
@@ -98,9 +93,8 @@ M.MASTER_MOD = "square_sqperf_all"
 -- The debug param every SQPERF mod declares (values {"Off", "On"}).
 M.PARAM_KEY = "sqperf_log"
 
---- The one debug gate rule, given a mod params table (getModParams() or runFn's allModParams): true when
---- all[mod][key] is the 2nd value (values {"Off", "On"}; params reach scripts as 1-based value
---- indices) or when the master switch mod is active (all[MASTER_MOD] present).
+--- True when all[mod][key] is the 2nd value (params reach scripts as 1-based value indices) or when
+--- the master switch mod is active (all[MASTER_MOD] present). all is getModParams() or runFn's allModParams.
 --- key defaults to PARAM_KEY. Anything that is not a table: false. Never errors, allocates nothing.
 local function debugOn(all, mod, key)
 	if type(all) ~= "table" then return false end
@@ -128,8 +122,7 @@ end
 --- New instrument. opts:
 ---   mod      (string, required)  modId, logged as mod=
 ---   ctx      (string)            "gs", "gui", "hud", "step", "run", ... logged as ctx=
----   timed    (boolean)           false: never read a clock (counts only). Default true. Not needed
----                                for worker-thread contexts (Clock is safe there).
+---   timed    (boolean)           false: never read a clock (counts only). Default true.
 ---   slowMs   (number)            slow-call threshold; default GUI_SLOW_MS for GUI_CONTEXTS, else SIM_SLOW_MS
 ---   paramKey (string)            mod.json param (values {"Off", "On"}) that enables level 3; read with
 ---                                getModParams at each window boundary (timed instruments only)
@@ -165,7 +158,7 @@ function M.new(opts)
 		end
 	else
 		self.timer = "none"
-		-- Untimed: windows run on os.time (plain C, no engine object); the gate is read once here.
+		-- Untimed: windows run on os.time; the gate is read once here.
 		self.now = function() return os.time() * 1000 end
 	end
 	self.sec = {}
@@ -214,9 +207,8 @@ function Inst:_logSlow(name, s, now)
 	s.n, s.slowN, s.slowMax, s.lastLog = 0, 0, 0, now
 end
 
---- Level 1 gate for a line below initMs: true while level 3 is on. A timed instrument reads its
---- gate first at its first window boundary (first stop), so at phase("init") the gate is read here
---- once more, in pcall (getModParams fails in states without api.engine: then off).
+--- True while level 3 is on, for a level 1 line below initMs. A timed instrument reads its gate first
+--- at its first window boundary (first stop), so this reads the gate once more, in pcall (an error is off).
 function Inst:_debugOn()
 	if self.on then return true end
 	if self.gate == nil then return false end
@@ -245,8 +237,6 @@ function Inst:_first(name, s, ms)
 	emit(self.prefix .. " phase=first ms=" .. fmt(total) .. " " .. table.concat(parts, " "))
 end
 
---- Window boundary: flush slow lines that waited out the rate limit, log the window if level 3
---- was on, re-read the gate, start the next window.
 function Inst:_window(now)
 	for _, name in ipairs(self.names) do
 		local s = self.sec[name]
@@ -325,14 +315,14 @@ function Inst:stop(name, t0)
 	return ms
 end
 
---- Counts one call of section `name` without reading a clock (a call worth counting, not timing).
+--- Counts one call of section `name` without reading a clock.
 --- Shows as `name n=…` in the window summary; never slow-logged. Untimed instruments open their
 --- windows here (os.time), timed ones on their next stop().
 function Inst:hit(name)
 	local s = self.sec[name]
 	if s == nil then
 		s = self:_section(name)
-		s.untimed = true -- summary shows n= only
+		s.untimed = true
 	end
 	s.n = s.n + 1
 	if not self.on then return end
@@ -353,9 +343,9 @@ end
 --- Logs `phase=<name> ms=<since t0> timer=<timer>` (level 1) when ms >= initMs or level 3 is on.
 --- Call once per phase. Returns ms either way.
 --- Optional detail, appended after one space: a string, or a string.format pattern plus its
---- arguments (`perf:phase("towns", t, "towns=%d num=%s", #res, tostring(num))`). The pattern is a
---- literal and the arguments ride on the Lua stack, so nothing is built or allocated when the line is
---- dropped; it is formatted (in pcall: a bad pattern logs the raw pattern) only when the line is logged.
+--- arguments (`perf:phase("towns", t, "towns=%d num=%s", #res, tostring(num))`). Nothing is built or allocated
+--- when the line is dropped; formatting happens only when the line is logged, in pcall.
+--- A bad pattern logs the raw pattern.
 function Inst:phase(name, t0, detail, ...)
 	local ms = 0
 	if self.timed then ms = self.now() - t0 end

@@ -1,9 +1,8 @@
 -- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083). Private build, not for publication.
--- Finds the vanilla street template of a road type for the current year: the newest base whose template is available.
 
-local templates : RusTemplates = {}
+local templates : RubTemplates = {}
 
---- template base name ("town_new_large_trees") -> resource name as the repository knows it
+--- base name ("town_new_large_trees") -> resource name in streetTemplateRep
 local byBaseName : {string : string} = nil
 
 local function baseName(resName : string) : string
@@ -37,7 +36,7 @@ local function isAvailable(resName : string, year : integer) : boolean
 	return (from == 0 or year >= from) and (to == 0 or year < to)
 end
 
-function templates.resolve(roadType : RusRoadType, suffix : string, year : integer) : string
+function templates.resolve(roadType : RubRoadType, suffix : string, year : integer) : string
 	for _, base in ipairs(roadType.bases) do
 		local resName = lookup(base .. suffix)
 		if resName ~= nil and isAvailable(resName, year) then

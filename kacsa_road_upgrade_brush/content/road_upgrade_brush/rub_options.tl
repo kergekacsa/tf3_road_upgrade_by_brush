@@ -1,19 +1,17 @@
 -- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083). Private build, not for publication.
--- Menu parameters of the tool and reading the chosen options from them.
 -- Check boxes and buttons store the 1-based index of the chosen value (check boxes: 1 = no, 2 = yes).
 
-local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RusConfig
-local rules = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_rules.tl" as RusRules
+local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig
+local rules = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_rules.tl" as RubRules
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl" as ConstructionReactUtil
 
-local options : RusOptions = {}
+local options : RubOptions = {}
 
---- first year with tram catenary, as the vanilla tram track tool (gui/construction/tools/tram_track_tool.res.lua)
+--- First year with tram catenary; same value as in gui/construction/tools/tram_track_tool.res.lua.
 local CatenaryYearFrom <const> = 1910
 
-local Problems <const> : {RusRules.Problem} = { "treesAndBarrier", "treesCountry", "noTemplate", "busTramLanes" }
+local Problems <const> : {RubRules.Problem} = { "treesAndBarrier", "treesCountry", "noTemplate", "busTramLanes" }
 
---- road type preselected in the menu
 local DefaultRoadType <const> = "rub_type_town_medium"
 
 local function defaultRoadTypeIndex() : integer
@@ -29,7 +27,7 @@ local function isYes(params : {string : number}, key : string) : boolean
 	return params[key] == 2
 end
 
-function options.fromParams(params : {string : number}) : RusChoices
+function options.fromParams(params : {string : number}) : RubChoices
 	local roadTypeIndex = math.floor(params["rub_roadType"] or defaultRoadTypeIndex())
 	if config.roadTypes[roadTypeIndex] == nil then
 		roadTypeIndex = defaultRoadTypeIndex()
@@ -39,12 +37,11 @@ function options.fromParams(params : {string : number}) : RusChoices
 		roadType = roadTypeIndex,
 		busLane = isYes(params, "rub_busLane"),
 		tram = tram,
-		-- the catenary parameter only exists from CatenaryYearFrom on
+		-- the catenary parameter exists only from CatenaryYearFrom on
 		catenary = tram and params["rub_catenary"] == 1,
 		trees = isYes(params, "rub_trees"),
 		barrier = isYes(params, "rub_barrier"),
 		lock = isYes(params, "rub_lock"),
-		-- bus lanes and tram tracks always go on both sides
 		symmetric = true,
 		underground = params["undergroundMode"] == 1,
 	}
@@ -70,8 +67,7 @@ local function isCountry(params : {string : number}) : boolean
 	return config.roadTypes[choices.roadType].country
 end
 
---- A parameter that only shows the explanation of a problem while the problem exists.
-local function problemParam(problem : RusRules.Problem) : ConstructionMenuParam
+local function problemParam(problem : RubRules.Problem) : ConstructionMenuParam
 	return {
 		key = "rub_problem_" .. problem,
 		name = _("rub_problem_name"),
@@ -124,7 +120,6 @@ function options.params() : {ConstructionMenuParam}
 			end,
 		},
 		checkBox("rub_trees", function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
-			-- keep it enabled while checked, so that a conflicting choice can be unchecked again
 			if isYes(params, "rub_trees") then
 				return "Enabled"
 			end

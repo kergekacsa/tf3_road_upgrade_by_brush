@@ -1,9 +1,8 @@
--- Text colours of the brush tool: errors red, warnings yellow, success green, in the game's theme colours. The colour is
--- set inline (meta.styleSheet), so the mod's stylesheet needs no extra rules.
+-- Text colours of the brush tool: errors red, warnings yellow, success green, in the game's theme colours.
 
 local styleutil = ug_require "::/gui/main/styleutil.tl" as StyleUtil
 
-local brushStyle : BrushStyle = {}
+local brushStyle : RubStyle = {}
 
 local themeColors : {string : {number}} = nil
 

@@ -1,35 +1,31 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884). Private build, not for publication.
--- Selection highlight. PURE: no api.* calls.
+-- Pure: no api.* calls.
 --
--- Two ways to show the selection in the world; MODE picks one or both:
---   "engine": the engine's own selection effect on ActionDescriptor.highlightedEntities. Its colour comes from the
---             Selector's selectionColor / selectionOutlineColor(1), which must be set together and must not be
---             transparent.
---   "lines":  our own red lines along every selected edge (Hermite curve cut into straight pieces) and a small red
---             circle on every selected construction's origin, drawn in the SAME single EdgeRenderable as the ring
---             (the engine asserts on more than one per recipe). Capped at MAX_SEGMENTS pieces.
---   "both":   default. The engine tint may not show on edges and constructions (the base game only uses it for
---             vehicles); the lines always show.
+-- MODE picks how the selection is shown:
+--   "engine": ActionDescriptor.highlightedEntities. The Selector's selectionColor and selectionOutlineColor(1) must be
+--             set together and must not be transparent.
+--   "lines":  red lines along every selected edge and a red circle on every selected construction's origin. They are
+--             drawn in the single EdgeRenderable of the ring (the engine asserts on more than one per recipe).
+--             Capped at MAX_SEGMENTS pieces.
+--   "both":   "engine" and "lines".
 
-local brush = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush.tl" as BulkBulldozerBrush
+local brush = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush.tl" as RubBrush
 
-local hl : BulkBulldozerHighlight = {}
+local hl : RubHighlight = {}
 
 hl.MODE = "both"
--- The Selector filter accepts only highlighted entities, so the engine's hover effect never lands on an object the
--- brush would not take (it uses the same colours as the highlight). false = accept every existing entity.
+-- true: the Selector filter accepts only highlighted entities. false: it accepts every existing entity.
 hl.HOVER_ONLY_HIGHLIGHTED = true
--- Straight pieces for all overlay lines + construction markers together (one EdgeRenderable).
+-- Limit of straight pieces for all overlay lines and construction markers together.
 hl.MAX_SEGMENTS = 1600
--- An edge is cut into pieces of about this length (metres), at most MAX_PER_EDGE pieces.
+-- SEGMENT_LENGTH is in metres. MAX_PER_EDGE is pieces per edge.
 hl.SEGMENT_LENGTH = 15
 hl.MAX_PER_EDGE = 8
--- Overlay line lift above the edge (metres) and the construction marker radius (metres).
+-- Both in metres: overlay line lift above the edge, construction marker radius.
 hl.LINE_OFFSET_Z = 1.5
 hl.MARKER_RADIUS = 8
 
--- Base palette: Error = fireEngineRed #CE2029 for the selection, Negative = lightCoral #F08080 for the hover
--- preview. The native bulldozer's red tint is engine-internal, so the base palette's red is the closest match.
+-- RED is the base palette's Error colour (#CE2029). CORAL is its Negative colour (#F08080).
 local RED : {number} = { 206 / 255, 32 / 255, 41 / 255 }
 local CORAL : {number} = { 240 / 255, 128 / 255, 128 / 255 }
 
@@ -45,8 +41,8 @@ function hl.usesLines(mode : string) : boolean
 	return mode == "lines" or mode == "both"
 end
 
--- "idle" = hover preview (what the brush would take now); anything else = the selection.
-function hl.colors(phase : string) : BulkBulldozerHighlightColors
+-- "idle" is the hover preview (CORAL). Any other phase is the selection (RED).
+function hl.colors(phase : string) : RubHighlightColors
 	if phase == "idle" then
 		return {
 			fill = rgba(CORAL, 0.25),
@@ -66,7 +62,7 @@ function hl.colors(phase : string) : BulkBulldozerHighlightColors
 end
 
 -- Upper bound of the curve length: the Bezier control polygon p0, p0 + t0/3, p1 - t1/3, p1.
-function hl.curveLength(c : BulkBulldozerCurve) : number
+function hl.curveLength(c : RubCurve) : number
 	local ax, ay = c.p0x + c.t0x / 3, c.p0y + c.t0y / 3
 	local bx, by = c.p1x - c.t1x / 3, c.p1y - c.t1y / 3
 	local function d(x0 : number, y0 : number, x1 : number, y1 : number) : number
@@ -84,7 +80,7 @@ function hl.piecesFor(length : number) : integer
 end
 
 -- Height on the curve (Hermite in z, like x/y), or nil when the curve carries no heights.
-function hl.curveZ(c : BulkBulldozerCurve, t : number) : number
+function hl.curveZ(c : RubCurve, t : number) : number
 	if c.p0z == nil or c.p1z == nil then return nil end
 	local t2 = t * t
 	local t3 = t2 * t
@@ -92,9 +88,9 @@ function hl.curveZ(c : BulkBulldozerCurve, t : number) : number
 		+ (-2 * t3 + 3 * t2) * c.p1z + (t3 - t2) * (c.t1z or 0)
 end
 
--- Pieces per curve within the budget: over budget every edge gets fewer pieces first (at least
--- one), then trailing edges are dropped. Returns the counts, how many curves fit, truncated.
-function hl.piecePlan(curves : {BulkBulldozerCurve}, maxSegments : integer) : {integer}, integer, boolean
+-- Pieces per curve within maxSegments. Over budget, every curve gets fewer pieces (at least one), then trailing
+-- curves are dropped. Returns the counts, how many curves fit, truncated.
+function hl.piecePlan(curves : {RubCurve}, maxSegments : integer) : {integer}, integer, boolean
 	if curves == nil or maxSegments == nil or maxSegments < 1 then return {}, 0, curves ~= nil and #curves > 0 end
 	local pieces : {integer} = {}
 	local total = 0
@@ -117,9 +113,9 @@ function hl.piecePlan(curves : {BulkBulldozerCurve}, maxSegments : integer) : {i
 end
 
 -- One curve cut into n straight pieces. Heights from the curve's z, else heightAt(x, y), else 0.
-function hl.curveSegments(c : BulkBulldozerCurve, n : integer,
-		heightAt? : function(number, number) : number) : {BulkBulldozerSegment}
-	local out : {BulkBulldozerSegment} = {}
+function hl.curveSegments(c : RubCurve, n : integer,
+		heightAt? : function(number, number) : number) : {RubSegment}
+	local out : {RubSegment} = {}
 	local function z(t : number, x : number, y : number) : number
 		local v = hl.curveZ(c, t)
 		if v ~= nil then return v end
@@ -138,9 +134,9 @@ function hl.curveSegments(c : BulkBulldozerCurve, n : integer,
 	return out
 end
 
-function hl.edgeSegments(curves : {BulkBulldozerCurve}, maxSegments : integer,
-		heightAt? : function(number, number) : number) : {BulkBulldozerSegment}, boolean
-	local out : {BulkBulldozerSegment} = {}
+function hl.edgeSegments(curves : {RubCurve}, maxSegments : integer,
+		heightAt? : function(number, number) : number) : {RubSegment}, boolean
+	local out : {RubSegment} = {}
 	local pieces, fit, truncated = hl.piecePlan(curves, maxSegments)
 	for i = 1, fit do
 		for _, sg in ipairs(hl.curveSegments(curves[i], pieces[i], heightAt)) do out[#out + 1] = sg end

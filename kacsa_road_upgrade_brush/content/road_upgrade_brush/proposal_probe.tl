@@ -1,13 +1,9 @@
--- Diagnostic probe: logs what the proposal of the single-click tool contains while the cursor is over a road,
--- so it can be compared with the replaceSegment proposal of the brush tool (same road, same template).
--- The game calls the hook many times a second, so the probe reads the proposal at most once per
--- MIN_INTERVAL seconds and logs only a changed line, at most MAX_LINES per session.
+-- Diagnostic probe: logs what the proposal of a construction tool contains while the cursor is over a road.
+-- It reads the proposal at most once per MIN_INTERVAL seconds and logs only a changed line, at most MAX_LINES per session.
 
-local probe : ProposalProbe = {}
+local probe : RubProposalProbe = {}
 
--- Switch for all diagnostics of the mod: the hover probe below (nothing calls install now; a tool action must call it),
--- the "segment to send" line of the brush commit, and
--- the instance, layer, and cursor lines of the brush tool. true turns them on.
+-- Switch for all diagnostics of the mod: this probe and the diagnostic lines of the brush tool. true turns them on.
 probe.ENABLED = false
 
 local MAX_LINES <const> = 60
@@ -32,7 +28,6 @@ local function idList(list : {integer}) : string
 	return string.format("%d [%s]", #(list or {}), table.concat(parts, ", "))
 end
 
--- The lanes (direction and transport modes), the road development lock and the edge type of one segment.
 local function segmentText(seg : Proposal.SegmentAndEntity) : string
 	local comp = seg.comp
 	local lanes : {string} = {}
@@ -48,8 +43,7 @@ local function segmentText(seg : Proposal.SegmentAndEntity) : string
 		tostring(comp.roadDevelopmentLocked), #(comp.edgeDecorations or {}), table.concat(lanes, " "))
 end
 
--- What the entities in toRemove are: a construction with town buildings is a house that the proposal removes or moves
--- (old2new maps a moved one to its new entity).
+-- A construction with town buildings is a house. old2new maps a moved entity to its new entity.
 local function removedKinds(proposal : Proposal) : string
 	local parts : {string} = {}
 	local types = api.type.ComponentType
@@ -73,8 +67,6 @@ local function removedKinds(proposal : Proposal) : string
 	return table.concat(parts, " | ")
 end
 
--- What the game says the proposal collides with, with the kind of each entity: a road (template, bridge or tunnel), a
--- construction, a node, or other. An entity that the proposal replaces itself is marked.
 local function collisionKinds(data : ProposalData, replaced : {integer}) : string
 	local info = data.collisionInfo
 	if info == nil then return "" end
@@ -107,7 +99,6 @@ local function collisionKinds(data : ProposalData, replaced : {integer}) : strin
 	return string.format("%s; %d buildings", table.concat(parts, " | "), #(info.buildingEntities or {}))
 end
 
--- The options the single-click tool has switched on.
 local function modifierText(params : Builtin.ConstructionActionParam) : string
 	local m = params.streetEdgeNodeModifier
 	if m == nil then return "no modifier" end
@@ -144,7 +135,7 @@ local function describe(params : Builtin.ConstructionActionParam, proposal : Pro
 	return table.concat(parts, "; ")
 end
 
--- Wraps getProposalStringsFn of the action, which the game calls with the proposal under the cursor.
+-- The game calls getProposalStringsFn with the proposal under the cursor.
 function probe.install(params : Builtin.ConstructionActionParam)
 	if not probe.ENABLED then return end
 	local original = params.getProposalStringsFn
