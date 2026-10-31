@@ -51,7 +51,8 @@ local PHASE_COMMITTING <const> = "committing"
 
 -- A result / notice stays in the status chip this long (seconds).
 local RESULT_SECONDS <const> = 3.0
--- A commit with no final callback after this long is given up on screen (seconds).
+-- A commit with no progress (no road finished, no retry pass started) for this long is given up on screen (seconds).
+-- The time counts from the last progress, so a long press of many roads is not cut off.
 local COMMIT_TIMEOUT <const> = 120.0
 
 -- The ring follows the cursor once it moved this far (metres); smaller moves don't re-render.
@@ -165,7 +166,7 @@ local function logMsg(msg : string)
 end
 
 -- Changes with every edit of the mod; the log line below shows which edit the game runs.
-local BUILD <const> = "2026-10-31 aq"
+local BUILD <const> = "2026-10-31 ar"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -889,6 +890,7 @@ local BulkBulldozerAction = react.RegisterRecipe("BrushUpgradeAction",
 			-- pcall: the tool may have been closed (recipe unmounted) before the last callback.
 			pcall(function()
 				if refJob:get() ~= job then return end
+				s.commitAt = os.clock()
 				if e ~= nil and ok then
 					sel.remove(s.stroke, { e })
 					refOverlay:set(nil)

@@ -22,7 +22,7 @@ Out of scope for the first version:
 - One-way road types for the brush tool. The single-click tool keeps them.
 - Upgrading tracks, stations, assets, or town buildings.
 - Publishing on mod.io.
-- More than 50 segments per press.
+- More than 200 segments per press.
 
 ## Requirements
 
@@ -35,7 +35,7 @@ Out of scope for the first version:
 - The brush tool MUST offer bus lane, tram track, catenary, and lock before the first version closes (build step 5). Each option MUST give the same result on a segment as the single-click tool: bus lane removes the car from the outer driving lane on both sides, tram track adds the tram, catenary adds the electric tram, lock sets `roadDevelopmentLocked`. The tool applies them by editing `laneConfigs` and the lock flag of the added segment of the `replaceSegment` proposal (`applyExtras` in `bb_upgrade.tl`). A road that already has the template and the extras is left alone. The brush tool MUST NOT send a proposal whose lanes or lock flag do not read back as meant (`applyExtras`). The brush tool MUST have the single-click tool's Underground button (key `undergroundMode`). When it is on, the brush shows the underground view and selects tunnels. The shortcut G (input action `IA_UNDERGOUND_MODE_TOGGLE`) MUST switch it, and the button MUST follow (the menu changes its param `undergroundMode` on the event `streetBuilderRequestUnderground`). When it is switched off, the underground view MUST be off again and the brush MUST work as before.
 - The brush tool MUST NOT offer the two one-way road types.
 - The brush tool description MUST say that one-way road types exist only in the single-click tool.
-- The selection cap MUST be 50 segments, and the command budget per press MUST be 50 (one command per segment).
+- The selection cap MUST be 200 segments, and the command budget per press MUST be 200 (one command per segment). Both come from `sel.STROKE_CAP` (user request 2026-10-31, raised from 50; build ar; confirmed in the game: presses of 193, 100, and 176 roads upgraded 190, 99, and 173 roads with no failed road, 82 s for 193 roads, about 0.43 s per road). A press of 200 roads takes about 100 s plus the retries, so the recipe MUST give up waiting for a commit only when no road has finished and no retry pass has started for 120 s.
 - The brush tool MUST keep the bulldozer's selection rules: it skips other players' roads, construction parts, industry roads, and gone entities. It allows town-owned and unowned roads.
 - While the underground view is on, the brush MUST select tunnels only and MUST NOT select roads on the ground (filter field `surface` false, reason `surface`). While it is off, tunnels are not selected (reason `underground`).
 - The brush MUST NOT select a stand-alone tram track, that is a street none of whose lanes carries a car, a bus, or a truck (`isTramOnly` in `bb_gather.tl`, reason `tram_only`). A road that has tram tracks besides its vehicle lanes is selected as before.
@@ -55,7 +55,7 @@ Out of scope for the first version:
 - After a run, the status chip MUST show the end status in its head line as `X updated, Y failed` (X = roads upgraded, Y = roads whose command failed in all attempts). The head MUST be green (theme colour `Ok`) when X > 0, with the part `Y failed` in yellow when Y > 0, and red when X is 0 and Y > 0. The detail line lists the unchanged roads, other skipped roads, the main reasons of the failures, and the cost. After a cancel the head is `Cancelled · X updated` in yellow. The end status MUST stay until the next stroke, the next upgrade, or Clear, also while failed roads are still selected.
 - The tool MUST show all its params in one window, the toolbar on the left (`location = Toolbar`). The menu shows params of the default location in a second window (a callout titled Settings); the tool MUST NOT use it. The order MUST be: radius, Underground, the road options (road type, bus lane, tram track, catenary, alley trees, noise barrier, lock, remove buildings, the red notes), the progress chip, the Upgrade and Clear buttons. The Clear label MUST be in the warning colour of the theme (yellow).
 - The brush MUST send its commands only while the game is paused (game speed 0). When the game runs, the brush MUST pause it with the command `api.cmd.makeGameSetSpeedCmd(0)`, check the speed afterwards, and set the old speed back when the upgrade is done. Before every command it MUST check the pause again, because the player may unpause. When the game cannot be paused, the brush MUST send no further command, keep the roads selected, and show the red message "Pause the game first". (The game documents the speed command only for positive numbers, so this is the first test of speed 0.)
-- The brush MUST wait 0.1 seconds after each sent command before it builds and sends the next one. The tool recipe drives the wait with `commit.tick()` on every step, and a new commit drops a wait that an unfinished commit left behind. The recipe MUST give a commit at least 120 seconds before it stops waiting for the result.
+- The brush MUST wait 0.1 seconds after each sent command before it builds and sends the next one. The tool recipe drives the wait with `commit.tick()` on every step, and a new commit drops a wait that an unfinished commit left behind. The recipe MUST give a commit at least 120 seconds without progress before it stops waiting for the result (each finished road restarts the time).
 - The failure log line of a road MUST describe the road (normal, bridge or tunnel; template; edge objects; decorations; parcels left and right), so the reason for a repeated failure can be found in the log.
 - The cost MUST be shown after the upgrade, from the cost the game reports for each command. A cost before the upgrade is not available.
 - The cost preview SHOULD compute when a stroke ends, not on every refresh while painting.
@@ -250,7 +250,7 @@ Names the copy changed so it can run next to the real Bulk Bulldozer: the log pr
 ## Consequences of the decisions together
 
 - The copy of the single-click tool has the same resource path and the same `rus_*` string keys as the original. Both mods cannot run at the same time.
-- A cap of 400 selected segments with a command budget of 50 would highlight more than one press upgrades. The cap MUST be 50.
+- A cap larger than the command budget would highlight more roads than one press upgrades, so the cap and the budget MUST stay equal (both 200 since build ar).
 - The cost preview builds one proposal per road, so it is made when a stroke ends. The tool script no longer previews the cost while painting.
 - A replaced segment may get a new entity id. The pre-send check then reports a neighbour as gone, and the upgrade is partial. The result line shows the counts.
 - The brush has no one-way road types. The tool description and the README MUST say so.

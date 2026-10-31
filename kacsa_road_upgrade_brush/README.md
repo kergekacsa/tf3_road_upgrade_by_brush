@@ -21,7 +21,7 @@ A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts two street
 
 ## Limits
 
-- Up to 50 roads per press.
+- Up to 200 roads per press. A run takes about half a second per road, and the game stays paused while it runs.
 - The brush offers the six two-way road types. The two one-way road types exist only in the single-click tool.
 - Alley trees do not exist for country roads. The toolbar shows a red note for impossible combinations.
 - The brush skips roads of other players, parts of constructions, and industry roads. It upgrades town roads and roads without an owner.

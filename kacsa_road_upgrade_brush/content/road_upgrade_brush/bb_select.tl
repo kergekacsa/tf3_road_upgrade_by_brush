@@ -7,8 +7,9 @@
 
 local sel : BulkBulldozerSelect = {}
 
--- One command per segment, so the selection stops growing past the 50 commands of one press.
-sel.STROKE_CAP = 50
+-- One command per segment, so the selection stops growing past the commands of one press. The highlight draws about
+-- 6 line pieces per road, so this stays within the overlay limit (bb_highlight MAX_SEGMENTS).
+sel.STROKE_CAP = 200
 -- PLAN "What a stroke hits": a construction is hit when its origin (transf translation) is in
 -- the circle. false = take every construction the octree returns for the circle (only right if
 -- the octree tests bounding volumes; settle with TESTING §2).
