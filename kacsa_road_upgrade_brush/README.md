@@ -27,7 +27,8 @@ A private Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts two street
 - The brush skips roads of other players, parts of constructions, and industry roads. It upgrades town roads and roads without an owner.
 - A road that already has the target type (and the same trees or barriers) is left alone and not charged.
 - A road whose command fails is tried again twice, each time after all other roads. Roads that still fail stay selected, so another press tries them again.
-- "Remove buildings in the way" is on by default. Some roads in towns still fail with "Unexpected parcel on a segment"; the single-click tool fails on some of them too.
+- "Remove buildings in the way" is on by default. A town road with building lots can fail with "Unexpected parcel on a segment". The brush cannot upgrade such a road and does not demolish any house for it. It stays selected and counts as failed. Upgrade it with the single-click tool, which moves or removes the houses itself.
+- A road that a placed asset (an asset group such as a decoration, a tree group, or a rock) blocks fails with "Collision". With "Remove buildings in the way" on, the first retry removes the asset, and the last retry sends the build with the game's errors ignored, as the Build Anyway mod does. Not yet confirmed in the game.
 - The cost is known only after the upgrade. There is no cost preview.
 - There is no undo.
 - The tool remembers the radius, road type, trees, barrier, bus lane, tram track, lock, and "Remove buildings in the way" during one game session. A new session starts with the defaults.

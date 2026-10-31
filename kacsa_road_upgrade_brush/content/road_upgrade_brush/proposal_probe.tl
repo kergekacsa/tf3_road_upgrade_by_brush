@@ -43,6 +43,65 @@ local function segmentText(seg : Proposal.SegmentAndEntity) : string
 		tostring(comp.roadDevelopmentLocked), #(comp.edgeDecorations or {}), table.concat(lanes, " "))
 end
 
+-- What the entities in toRemove are: a construction with town buildings is a house that the proposal removes or moves
+-- (old2new maps a moved one to its new entity).
+local function removedKinds(proposal : Proposal) : string
+	local parts : {string} = {}
+	local types = api.type.ComponentType
+	for i, e in ipairs(proposal.toRemove or {}) do
+		if i > MAX_IDS then break end
+		local kinds : {string} = {}
+		local okC, c = pcall(function() : Engine.Component.Construction
+			return api.engine.getComponent(e, types.CONSTRUCTION) as Engine.Component.Construction
+		end)
+		if okC and c ~= nil then
+			kinds[#kinds + 1] = string.format("construction (%d town buildings, %s)", #(c.townBuildings or {}), tostring(c.fileName))
+		end
+		local okE, edge = pcall(function() : Engine.Component.BaseEdge
+			return api.engine.getComponent(e, types.BASE_EDGE) as Engine.Component.BaseEdge
+		end)
+		if okE and edge ~= nil then kinds[#kinds + 1] = "edge" end
+		local okM, moved = pcall(function() : any return (proposal.old2new as any as {integer : any})[e] end)
+		kinds[#kinds + 1] = (okM and moved ~= nil) and "moved" or "removed"
+		parts[#parts + 1] = string.format("%d: %s", e, table.concat(kinds, ", "))
+	end
+	return table.concat(parts, " | ")
+end
+
+-- What the game says the proposal collides with, with the kind of each entity: a road (template, bridge or tunnel), a
+-- construction, a node, or other. An entity that the proposal replaces itself is marked.
+local function collisionKinds(data : ProposalData, replaced : {integer}) : string
+	local info = data.collisionInfo
+	if info == nil then return "" end
+	local own : {integer : boolean} = {}
+	for _, e in ipairs(replaced) do own[e] = true end
+	local types = api.type.ComponentType
+	local parts : {string} = {}
+	for i, c in ipairs(info.collisionEntities or {}) do
+		if i > MAX_IDS then break end
+		local e = c.entity
+		local kind = "other"
+		local okE, edge = pcall(function() : Engine.Component.BaseEdge
+			return api.engine.getComponent(e, types.BASE_EDGE) as Engine.Component.BaseEdge
+		end)
+		local okC, con = pcall(function() : Engine.Component.Construction
+			return api.engine.getComponent(e, types.CONSTRUCTION) as Engine.Component.Construction
+		end)
+		local okN, node = pcall(function() : Engine.Component.BaseNode
+			return api.engine.getComponent(e, types.BASE_NODE) as Engine.Component.BaseNode
+		end)
+		if okE and edge ~= nil then
+			kind = string.format("road (%s, type %s)", tostring(edge.roadTemplate), tostring(edge.type))
+		elseif okC and con ~= nil then
+			kind = "construction (" .. tostring(con.fileName) .. ")"
+		elseif okN and node ~= nil then
+			kind = "node"
+		end
+		parts[#parts + 1] = string.format("%d: %s%s", e, kind, own[e] and ", replaced by the proposal" or "")
+	end
+	return string.format("%s; %d buildings", table.concat(parts, " | "), #(info.buildingEntities or {}))
+end
+
 -- The options the single-click tool has switched on.
 local function modifierText(params : Builtin.ConstructionActionParam) : string
 	local m = params.streetEdgeNodeModifier
@@ -65,11 +124,13 @@ local function describe(params : Builtin.ConstructionActionParam, proposal : Pro
 		"added segments [" .. table.concat(templates, " | ") .. "]",
 		string.format("nodes +%d/-%d, edge objects +%d", #street.addedNodes, #street.removedNodes, #street.edgeObjectsToAdd),
 		"toRemove " .. idList(proposal.toRemove),
+		"toRemove kinds [" .. removedKinds(proposal) .. "]",
 		string.format("toAdd %d", #(proposal.toAdd or {})),
 	}
 	if data ~= nil then
 		local es = data.errorState
 		parts[#parts + 1] = string.format("costs %s", tostring(data.costs))
+		parts[#parts + 1] = "collides with [" .. collisionKinds(data, removed) .. "]"
 		if es ~= nil then
 			parts[#parts + 1] = string.format("messages [%s], warnings [%s]",
 				table.concat((es.messages or {}) as {string}, "; "), table.concat((es.warnings or {}) as {string}, "; "))

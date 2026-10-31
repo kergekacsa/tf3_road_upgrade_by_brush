@@ -399,6 +399,42 @@ local function buildingCount(data : WorldBuildProposalCommandData) : integer
 	return 0
 end
 
+-- The asset groups (placed trees, rocks and decoration assets) that a failed command collides with, and whether they are
+-- the only thing in the way besides the road itself. The game does not remove an asset group on its own, so a road
+-- that one of them blocks fails with the message "Collision".
+local function assetGroupsOf(data : WorldBuildProposalCommandData, own : integer) : {integer}, boolean
+	local found : {integer} = {}
+	local seen : {integer : boolean} = {}
+	local onlyAssets = true
+	pcall(function()
+		for _, c in ipairs(data.resultProposalData.collisionInfo.collisionEntities or {}) do
+			local e = c.entity
+			if e ~= own and not seen[e] then
+				seen[e] = true
+				if api.engine.getComponent(e, api.type.ComponentType.ASSET_GROUP) ~= nil then
+					found[#found + 1] = e
+				else
+					onlyAssets = false
+				end
+			end
+		end
+	end)
+	return found, onlyAssets and #found > 0
+end
+
+-- Adds entities to the list of entities that the proposal removes.
+local function addToRemove(p : Proposal, ids : {integer})
+	local list : {integer} = {}
+	local seen : {integer : boolean} = {}
+	for _, e in ipairs(p.toRemove or {}) do
+		if not seen[e] then seen[e] = true; list[#list + 1] = e end
+	end
+	for _, e in ipairs(ids) do
+		if not seen[e] then seen[e] = true; list[#list + 1] = e end
+	end
+	p.toRemove = list
+end
+
 -- Cost of the roads the game did upgrade; nil when the game reports none.
 local function costOf(data : WorldBuildProposalCommandData) : integer
 	local ok, c = pcall(function() : integer return data.resultProposalData.costs end)
@@ -634,6 +670,11 @@ function upgrade.commit(edges : {integer}, template : string, extras : BrushExtr
 	-- Set when the game could not be paused: no further command is sent.
 	local pauseFailed = false
 
+	-- Roads whose command failed with "Collision" and where only asset groups are in the way: road -> asset groups.
+	-- The first retry puts them in the removal list of the proposal; the second retry also sends it with ignoreErrors,
+	-- as the Build Anyway mod does. Both need the option "Remove buildings in the way".
+	local assetBlockers : {integer : {integer}} = {}
+
 	-- One road: nothing for a road that already is the target; else its command, sent while the game is paused.
 	-- `done` runs when the road is finished, from the command callback when a command was sent.
 	local function upgradeRoad(e : integer, attempt : integer, done : function())
@@ -672,8 +713,25 @@ function upgrade.commit(edges : {integer}, template : string, extras : BrushExtr
 			end
 			local called = false
 			busy = true
+			local context = makeContext(removeBuildings)
+			local blockers = removeBuildings and attempt > 0 and assetBlockers[e] or nil
+			if blockers ~= nil then
+				-- An earlier road of this press may have removed a shared asset group; the game refuses a removal list
+				-- with an entity that is gone ("Unknown exception" in PreprocessProposal).
+				local remaining : {integer} = {}
+				for _, a in ipairs(blockers) do
+					if api.engine.entityExists(a) then remaining[#remaining + 1] = a end
+				end
+				blockers = #remaining > 0 and remaining or nil
+			end
+			local force = blockers ~= nil and attempt >= RETRY_PASSES
+			if blockers ~= nil then
+				addToRemove(p, blockers)
+				summary = summary .. string.format("; %d asset groups in the way put in toRemove%s", #blockers,
+					force and ", sent with ignoreErrors" or "")
+			end
 			local okS, errS = pcall(function() : string
-				local cmd = api.cmd.makeWorldBuildProposalCmd(p, makeContext(removeBuildings), false, true, true)
+				local cmd = api.cmd.makeWorldBuildProposalCmd(p, context, force, true, true)
 				api.cmd.sendCommand(cmd, function(data : WorldBuildProposalCommandData, success : boolean)
 					if called then return end
 					called = true
@@ -690,6 +748,8 @@ function upgrade.commit(edges : {integer}, template : string, extras : BrushExtr
 					else
 						fail(e, msgs[1] or REFUSED_BY_GAME)
 						outcome = "FAILED"
+						local assets, onlyAssets = assetGroupsOf(data, e)
+						assetBlockers[e] = (onlyAssets and #msgs == 1 and msgs[1] == "Collision") and assets or nil
 					end
 					logLine(string.format("cmd %d%s: edge %d -> %s%s; %s; %s; %s", res.commands, attempt > 0 and string.format(" (retry %d)", attempt) or "", e,
 						outcome, #msgs > 0 and (": " .. table.concat(msgs, "; ")) or "", simulationText(), summary,

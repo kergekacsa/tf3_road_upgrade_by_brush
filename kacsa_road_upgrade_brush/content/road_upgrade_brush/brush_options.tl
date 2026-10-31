@@ -39,7 +39,7 @@ local function removeBuildingsParam() : ConstructionMenuParam
 	return {
 		key = REMOVE_BUILDINGS_KEY,
 		name = _("Remove buildings in the way"),
-		tooltip = _("Buildings that block the new road are demolished, as with the single-click tool. Off: such roads are skipped."),
+		tooltip = _("Buildings that block the new road are demolished, as with the single-click tool. A placed asset that blocks the road is removed on the first retry, and the last retry forces the build. Off: such roads are skipped."),
 		values = { _("No"), _("Yes") },
 		defaultIndex = 2,
 		uiType = api.type["enum"].ScriptParamType.CheckBox,
