@@ -74,7 +74,9 @@ local function reasonLabels() : {string : string}
 		["on the ground"] = _("on the ground"),
 		["tram track"] = _("tram track"),
 		["not enough money"] = _("not enough money"),
-		["nothing left to remove"] = _("nothing left to remove"),
+		["nothing left to upgrade"] = _("nothing left to upgrade"),
+		["bus lane or lock could not be set"] = _("bus lane or lock could not be set"),
+		["no valid road type"] = _("no valid road type"),
 		["script error"] = _("script error"),
 		["command limit reached"] = _("command limit reached"),
 		["previous upgrade still running"] = _("previous upgrade still running"),
@@ -139,7 +141,7 @@ function status.lines(v : RubStatusInput) : RubStatusText
 			local filled = math.floor(done * PROGRESS_BAR_WIDTH / total)
 			local bar = "[" .. string.rep("#", filled) .. string.rep(".", PROGRESS_BAR_WIDTH - filled) .. "]"
 			if (v.retryAttempt or 0) > 0 then
-				local t = text(string.format(_("Retrying failed ones %d/%d"), v.retryAttempt, v.retryPasses or 0), string.format("%s %d of %d", bar, done, total), nil, stopHint())
+				local t = text(string.format(_("Retrying failed ones %d/%d"), v.retryAttempt, v.retryPasses or 0), string.format(_("%s %d of %d"), bar, done, total), nil, stopHint())
 				t.running = true
 				return t
 			end

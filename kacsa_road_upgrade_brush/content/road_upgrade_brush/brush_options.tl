@@ -115,7 +115,7 @@ function brushOptions.template(params : {string : number}) : string, string
 	local year = api.engine.util.getYear()
 	local problems = rules.check(choices, year)
 	if #problems > 0 then
-		return nil, _("rub_problem_" .. problems[1])
+		return nil, _("rub_chip_" .. problems[1])
 	end
 	return rules.targetTemplate(choices, year), nil
 end

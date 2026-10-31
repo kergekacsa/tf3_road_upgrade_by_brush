@@ -30,8 +30,10 @@ Version 2 idea (not decided): extend the method to railroad tracks, that is, sel
 - The mod MUST contain exactly one tool in the road tools menu: the brush upgrade tool. It MUST NOT add a single-click upgrade tool.
 - The mod MUST NOT contain a Bulldoze button or any removal code.
 - The mod MUST be independent: no mod dependency. It MUST work with and without Road Upgrade All in One (`road_upgrade_suite`) and Bulk Bulldozer switched on. Every file path and text key of the mod MUST be unique (`road_upgrade_brush/rub_*`, `rub_*` keys, `gui/road_upgrade_brush/`), and every global Teal type name carries the prefix `Rub`.
-- The mod MUST ship its own tool icon (`gui/road_upgrade_brush/brush_tool@2x.tga` and `brush_tool_preview@2x.tga`) and a mod.io image (`image_00.jpg`). It MUST NOT ship image files of another mod.
+- The mod MUST ship its own tool icon (`gui/road_upgrade_brush/brush_tool@2x.tga` and `brush_tool_preview@2x.tga`) and the mod.io pictures `_metadata/0.png` (the cover: a screenshot with the title card) and `_metadata/1.png` (a gallery picture: the same screenshot without the card), both PNG, 1920 x 1080, at most 8 MB. It MUST NOT ship image files of another mod.
+- The mod folder MUST hold only files that the mod needs, with lowercase names (the README and the SPEC stay outside it). `_metadata/modinfo.json` MUST have a name of at most 32 characters, a summary of at most 100 characters without line breaks, and an English description, and its tags MUST be tags of the game (`Script Mod`, `Road Construction`).
 - The mod revision in `mod.json` MUST be 1.
+- `strings.json` MUST hold every text that the code and `mod.json` pass to the translation (`_()`, the name, tooltip, and values of the settings of `mod.json`) in the 12 languages of the game besides English (`base/strings/`: de, es, fr, it, ja, ko, nl, pl, pt_BR, ru, zh_CN, zh_TW). English uses the text as written in the code, and a key only for the `rub_*` texts. A text that is also a key in the `strings.json` of Bulk Bulldozer MAY reuse its translation; the README credits it. Every reason text of the commit MUST have an entry in the label table of `bb_status.tl`. The names of the road types MUST be the names the game gives to its street templates. A text of the code that has the same English text as a text of the game (`base.mo`) MUST use the game's translation, except where the game's word is a mistranslation for this use (Off in Italian: the game says Mai, the mod says No as in the settings screens of the game). A text of the status chip MUST fit `status.MAX_CHARS` (36 columns, CJK characters count 2) in every language; the chip shows the short problem texts (`rub_chip_*`) and the toolbar notes show the full texts (`rub_problem_*`).
 - The mod MUST keep the original authors' names in the headers of copied files (including `rub_types.d.tl`). The README MUST name the copied texts of `strings.json`, which cannot carry a header.
 - A comment in the code MUST state only a contract, an invariant, a unit, or a constraint that holds now. Generated Lua is the same before and after a comment change.
 
@@ -113,8 +115,8 @@ Version 2 idea (not decided): extend the method to railroad tracks, that is, sel
 
 | Source | Files in this mod |
 |---|---|
-| Road Upgrade All in One (`road_upgrade_suite`, mod.io 6487083, kurowasiichi) | `rub_config`, `rub_options`, `rub_rules`, `rub_templates`, `rub_types.d.tl`, and the texts of `strings.json`, with renamed paths, keys, and types |
-| Bulk Bulldozer (`square_bulk_bulldozer`, mod.io 6434884, square17) | `bb_brush`, `bb_select`, `bb_gather`, `bb_highlight`, `bb_status`, `bb_types.d.tl`, `brush_upgrade.css.lua`, `sqperf/*`, and the recipe in `brush_upgrade.script.tl`, with a new module prefix, `STROKE_CAP` 200 (the original has 400), and no removal code |
+| Road Upgrade All in One (`road_upgrade_suite`, mod.io 6487083, kurowasiichi) | `rub_config`, `rub_options`, `rub_rules`, `rub_templates`, `rub_types.d.tl`, and the English and Traditional Chinese texts of `strings.json`, with renamed paths, keys, and types |
+| Bulk Bulldozer (`square_bulk_bulldozer`, mod.io 6434884, square17) | `bb_brush`, `bb_select`, `bb_gather`, `bb_highlight`, `bb_status`, `bb_types.d.tl`, `brush_upgrade.css.lua`, `sqperf/*`, and the recipe in `brush_upgrade.script.tl`, with a new module prefix, `STROKE_CAP` 200 (the original has 400), and no removal code. 38 texts of `strings.json` in 12 languages are its translations, and a few more in some languages. |
 | This mod | `bb_upgrade.tl` (the upgrade commit), `brush_options.tl`, `brush_style.tl`, `brush_types.d.tl`, `proposal_probe.tl`, the icons, and the image |
 
 - Road Upgrade All in One sends no command. It fills a `streetEdgeNodeModifier` and returns the vanilla action `ACTION_STREET_BUILDER_UPGRADER`; the game builds and sends the command on click. Its `config.tl` lists eight road types (the last two are one-way); trees and barriers are templates with the suffixes `_trees` and `_barriers`; country roads have no trees template; `templates.resolve` picks the newest available template for the current year; `rules.check` returns the problems of an option combination.
@@ -173,6 +175,7 @@ Version 2 idea (not decided): extend the method to railroad tracks, that is, sel
 - The removal of asset groups on the first retry and the option "Remove buildings in the way".
 - The keys M and N, the hover preview over a waiting selection, the chip `200 selected (max)`, and the "Brush radius" label with its tooltip.
 - The pause path (a press at speed 0 and at speed 1 with the speed set back) and the lane check with the bus lane (`edit verified` on every road).
+- Closing the tool during a run cancels the run after the road in progress and sets the game speed back.
 - The brush appears once in the menu, with and without the original mods.
 
 ### Not verified in the game
@@ -180,6 +183,7 @@ Version 2 idea (not decided): extend the method to railroad tracks, that is, sel
 - Tram track and lock with the check of every lane, and the bus lane together with the tram track.
 - The rule for an unreadable game speed, the abort after 120 s, and the refusal of a second commit. The situations did not occur in testing.
 - The asset-group decision without the message text.
+- The display of the translations in the game: whether the texts of `strings.json` show in each of the 12 languages, whether the long texts fit, and whether the text of `strings.json` or the text of the game wins for the same word.
 - The forced build (`ignoreErrors`) on the last retry.
 - Esc cancelling a running upgrade when the keyboard focus is on the map.
 - Whether the menu builds the toolbar again on each open.

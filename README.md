@@ -1,6 +1,6 @@
 # Road Upgrade Brush
 
-A Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool in the road tools menu: **Road Upgrade Brush**. It selects roads with a brush and upgrades them to a street type in one press. The mod is independent: it needs no other mod and is built to run next to the original mods "Road Upgrade All in One" and "Bulk Bulldozer". It has no single-click tool, so the original one does not appear twice in the menu.
+A Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool in the road tools: **Road Upgrade Brush**. Find it in the build menu under **Roads**, in the **Tools** tab, as the green brush. It selects roads with a brush and upgrades them to a street type in one press. The mod is independent: it needs no other mod and is built to run next to the original mods "Road Upgrade All in One" and "Bulk Bulldozer". It has no single-click tool, so the original one does not appear twice in the menu.
 
 ## Before you start
 
@@ -24,7 +24,7 @@ A Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool in the ro
 - The brush skips roads of other players, parts of constructions, and industry roads. It upgrades town roads and roads without an owner.
 - A road that already has the target type (and the same trees or barriers) is left alone and not charged.
 - A road whose command fails is tried again twice, each time after all other roads. Roads that still fail stay selected, so another press tries them again.
-- "Remove buildings in the way" is on by default. A town road with building lots can fail with "Unexpected parcel on a segment". The brush cannot upgrade such a road and does not demolish any house for it. It stays selected and counts as failed. Upgrade it with the single-click tool of Road Upgrade All in One, which moves or removes the houses itself.
+- "Remove buildings in the way" is on by default. A town road with building lots can fail with "Unexpected parcel on a segment". The brush cannot upgrade such a road and does not demolish any house for it. It stays selected and counts as failed. Road Upgrade All in One (menu entry "Combined Road Upgrade") can upgrade many such roads, because its tool moves or removes the houses itself.
 - A road that a placed asset (an asset group such as a decoration, a tree group, or a rock) blocks fails with "Collision". With "Remove buildings in the way" on, the first retry removes the asset, and the last retry sends the build with the game's errors ignored, as the Build Anyway mod does.
 - The brush sends commands only while the game is paused. If it cannot read the game speed or cannot pause the game, it sends nothing and the roads stay selected with the note "Pause the game first".
 - If the game gives no answer for 120 seconds, the tool gives up, sets the game speed back, and shows "No answer from the game". Only one upgrade runs at a time: a press while the previous upgrade still runs sends nothing and shows "previous upgrade still running".
@@ -39,16 +39,23 @@ A Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool in the ro
 
 ## Credits
 
-- The road types, add-ons, and rules are taken from "Road Upgrade All in One" by kurowasiichi (mod.io 6487083). The headers of the copied files name the author. The road type, option, and problem texts in `strings.json` (English and the Traditional Chinese translation, 25 keys each) are copies of the texts of that mod, with the keys renamed to `rub_*`. The tool icon and the mod.io image are drawn for this mod.
-- The brush, selection, highlight, and toolbar code is taken from "Bulk Bulldozer" by square17 (mod.io 6434884). The headers of the copied files name the authors.
+- The road types, add-ons, and rules are taken from "Road Upgrade All in One" by kurowasiichi (mod.io 6487083). The headers of the copied files name the author. 24 of the road type, option, and problem texts in `strings.json` (the English and Traditional Chinese texts) are copies of the texts of that mod, with the keys renamed to `rub_*`. The road type tooltip is rewritten for the brush, and four short status texts (`rub_chip_*`) are new. The road type names in the other languages are the names the game gives to its street templates. The tool icon and the mod.io image are drawn for this mod.
+- The brush, selection, highlight, and toolbar code is taken from "Bulk Bulldozer" by square17 (mod.io 6434884). The headers of the copied files name the authors. In `strings.json`, 38 texts (for example "Selection" and "%d selected") in the 12 languages besides English are the translations of that mod, and a few more in some of the languages.
+
+## Translations
+
+The mod has texts in all 13 languages of the game: English, German, Spanish, French, Italian, Japanese, Korean, Dutch, Polish, Brazilian Portuguese, Russian, Simplified Chinese, and Traditional Chinese. Where the game has a translation of the same word (for example Clear, Cancel, Yes, No, Catenary, On, and Off), the mod uses the game's word. The road type names are the names the game gives to its street templates. The texts that come from Bulk Bulldozer and Road Upgrade All in One are listed under Credits. The other translations are machine-made and have not been checked by native speakers. Wrong or odd texts MAY be reported.
 
 ## Log
 
-The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[BrushUpgrade]`. The log shows each command, the game's messages, and the game speed. The diagnostic lines (tool instances, world layer, cursor, segment to send) are off. To turn them on, set `probe.ENABLED = true` in `content/road_upgrade_brush/proposal_probe.tl`.
+The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[BrushUpgrade]`. The log shows each command, the game's messages, and the game speed. The diagnostic lines (tool instances, world layer, cursor, segment to send) are off. To turn them on, set `probe.ENABLED = true` in `kacsa_road_upgrade_brush/content/road_upgrade_brush/proposal_probe.tl`.
 
 ## Release files
 
+The mod folder is `kacsa_road_upgrade_brush/`. This README and the SPEC sit next to it, outside the folder that is uploaded.
+
 - `mod.json`: modId `kacsa_road_upgrade_brush`, revision 1, no dependencies.
-- `_metadata/modinfo.json`: name, summary, and description for mod.io.
-- `image_00.jpg`: the mod.io image (1400 x 800).
+- `_metadata/modinfo.json`: name (18 characters), summary (88 characters), description (HTML, English), tags, and author for mod.io.
+- `_metadata/0.png`: the cover (1920 x 1080): a screenshot of the game with the title card.
+- `_metadata/1.png`: a gallery picture (1920 x 1080): the same screenshot without the card.
 - `content/gui/road_upgrade_brush/brush_tool@2x.tga` and `brush_tool_preview@2x.tga`: the tool icon and its preview in the menu.
