@@ -50,11 +50,11 @@ The mod has texts in all 13 languages of the game: English, German, Spanish, Fre
 
 ## Log
 
-The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[BrushUpgrade]`. The log shows each command, the game's messages, and the game speed. The diagnostic lines (tool instances, world layer, cursor, segment to send) are off. To turn them on, set `probe.ENABLED = true` in `kacsa_road_upgrade_brush/content/road_upgrade_brush/proposal_probe.tl`.
+The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[BrushUpgrade]`. The log shows each command, the game's messages, and the game speed. A circle that stops following the pointer writes a `stuck ring:` line on the next click, and the world layer writes `layer event` lines when it mounts or unmounts. The diagnostic lines (tool instances, world layer, cursor, segment to send) are off. To turn them on, set `probe.ENABLED = true` in `kacsa_road_upgrade_brush/content/road_upgrade_brush/proposal_probe.tl`.
 
 ## Release files
 
-The mod folder is `kacsa_road_upgrade_brush/`. This README and the SPEC sit next to it, outside the folder that is uploaded.
+The mod folder is `kacsa_road_upgrade_brush/`. This README, the SPEC, and `DEVELOPMENT-TOOLS.md` (the Teal and Lua checks) sit next to it, outside the folder that is uploaded.
 
 - `mod.json`: modId `kacsa_road_upgrade_brush`, revision 1, no dependencies.
 - `_metadata/modinfo.json`: name (25 characters), summary (93 characters), description (HTML, English), tags, and author for mod.io.

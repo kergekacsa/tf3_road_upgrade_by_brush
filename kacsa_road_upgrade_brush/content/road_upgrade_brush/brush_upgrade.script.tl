@@ -181,7 +181,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-10-31 bs"
+local BUILD <const> = "2026-11-01 bt"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -718,6 +718,22 @@ end
 -- NO_TERRAIN_MAX_LINES lines per session).
 local NO_TERRAIN_AFTER <const> = 1.5
 local NO_TERRAIN_MAX_LINES <const> = 12
+-- A click is logged as a stuck ring when the step did not update the ring for STUCK_RING_AFTER seconds, or when the ring
+-- is more than STUCK_RING_OFFSET metres from the terrain position under the pointer. At most STUCK_RING_MAX_LINES
+-- lines per session.
+local STUCK_RING_AFTER <const> = 1.0
+local STUCK_RING_OFFSET <const> = 20.0
+local STUCK_RING_MAX_LINES <const> = 8
+local g_stuckRingLines = 0
+-- Mount and unmount of the world layer are logged with the os.clock time, at most LAYER_EVENT_MAX_LINES lines per session.
+local LAYER_EVENT_MAX_LINES <const> = 200
+local g_layerEventLines = 0
+
+local function layerEventMsg(msg : string)
+	if g_layerEventLines >= LAYER_EVENT_MAX_LINES then return end
+	g_layerEventLines = g_layerEventLines + 1
+	logMsg(string.format("layer event %.3f: %s", os.clock(), msg))
+end
 local g_noTerrainSince : number = nil
 local g_noTerrainLines = 0
 
@@ -772,6 +788,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	local refRenderActive = react.useRef(false) as ReactRefT<boolean> -- isActive at the last render
 	local refLayerDownAt = react.useRef(nil) as ReactRefT<number>     -- os.clock() the world layer unmounted
 	local refLayerUp = react.useRef(false) as ReactRefT<boolean>      -- world layer mounted: this entry is the selected tool
+	local refCursorStepAt = react.useRef(nil) as ReactRefT<number>    -- os.clock() the step last updated the ring
 	local refInstance = react.useRef(0) as ReactRefT<integer>         -- number of this instance
 	if refInstance:get() == 0 then
 		g_instances = g_instances + 1
@@ -1255,6 +1272,22 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		if active ~= refWasActive:get() then
 			refWasActive:set(active)
 			if active then
+				-- Every use starts from default state; only the radius (g_radius, radiusState) carries over. The mounted
+				-- state of the world layer (refLayerUp, g_layerOwner*) describes the game, so it stays.
+				resetAll("tool activated", false)
+				cursorState:set(nil)
+				refShift:set(false)
+				refHover:set(nil)
+				refHoverSample:set(nil)
+				refHoverOverlay:set(nil)
+				refHoverPieces:set(nil)
+				refSame:set(nil)
+				refHoverSame:set(nil)
+				refCursorStepAt:set(nil)
+				refLayerDownAt:set(nil)
+				g_viewOverride = nil
+				g_lastShortcut = nil
+				g_noTerrainSince = nil
 				local p = prm.getCurrentParams()
 				logMsg(string.format("tool activated (instance #%d); getCurrentParams ", refInstance:get()) .. paramsToString(p))
 				logMsg("highlight mode " .. hl.describeMode(hl.MODE)
@@ -1298,6 +1331,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			return
 		end
 		g_noLayerLogged = false
+		refCursorStepAt:set(os.clock())
 
 		local hasTerrain = api.gui.mouse.hasTerrainPosition()
 		if not hasTerrain then
@@ -1499,12 +1533,50 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		if brushOptions.mode(g_toolParams) == "rail" then copyTrack() else copyRoad() end
 	end
 
+	-- This instance's world layer is mounted: the step follows the pointer and the instance owns the mouse events.
+	local function claimLayer()
+		refLayerUp:set(true)
+		refLayerDownAt:set(nil)
+		g_layerOwnerId = refInstance:get()
+		g_layerOwnerSetParam = function(p : ConstructionCustomActionParams<RubActionParam>)
+			refParam:set(p)
+			refPushedAt:set(os.clock())
+		end
+	end
+
 	local onMouse = function(e : Gui.Mouse.Event) : boolean
 		local tMouse = perf:start()
+		-- Only the Selector of a mounted layer receives mouse events, so an event marks the layer mounted. Events within
+		-- LAYER_GONE_SECONDS of an unmount are ignored.
+		local wasUp = refLayerUp:get()
+		if not wasUp then
+			local downAt = refLayerDownAt:get()
+			if downAt == nil or os.clock() - downAt >= LAYER_GONE_SECONDS then
+				claimLayer()
+				layerEventMsg(string.format("instance #%d: mouse event on a layer marked unmounted, marked mounted again", refInstance:get()))
+			end
+		end
 		local T = api.gui.mouse.Event.Type
 		local isLmb = e.button == 0
 		local isRmb = e.button == 2
 		local isMmb = e.button == 1
+		if isLmb and e.type == T.Pressed and g_stuckRingLines < STUCK_RING_MAX_LINES then
+			local stepAt = refCursorStepAt:get()
+			local ring = cursorState:old()
+			local live = api.gui.mouse.hasTerrainPosition() and api.gui.mouse.getTerrainPosition() or nil
+			local stepStale = stepAt == nil or os.clock() - stepAt > STUCK_RING_AFTER
+			local ringOff = ring ~= nil and (live == nil or math.abs(live.x - ring.x) > STUCK_RING_OFFSET
+				or math.abs(live.y - ring.y) > STUCK_RING_OFFSET)
+			if stepStale or ringOff then
+				g_stuckRingLines = g_stuckRingLines + 1
+				logMsg(string.format("stuck ring: click; last ring update %s s ago; ring %s, terrain position under the pointer %s; instance #%d of %d, layer owner #%d, layer was %s, isActive %s, wasActive %s, underground button %s",
+					stepAt ~= nil and string.format("%.1f", os.clock() - stepAt) or "never",
+					ring ~= nil and string.format("%.1f/%.1f", ring.x, ring.y) or "none",
+					live ~= nil and string.format("%.1f/%.1f", live.x, live.y) or "none",
+					refInstance:get(), g_instances, g_layerOwnerId, wasUp and "up" or "down",
+					tostring(refParam:get().isActive), tostring(refWasActive:get()), tostring(g_toolParams["undergroundMode"])))
+			end
+		end
 		if e.type == T.Moved then
 			local ml = refMoved:get()
 			ml.count = ml.count + 1
@@ -1645,16 +1717,11 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		-- selection (here or in onStep).
 		react.onMount(function()
 			pcall(function()
-				refLayerUp:set(true)
-				g_layerOwnerId = refInstance:get()
-				g_layerOwnerSetParam = function(p : ConstructionCustomActionParams<RubActionParam>)
-					refParam:set(p)
-					refPushedAt:set(os.clock())
-				end
 				local downAt = refLayerDownAt:get()
-				refLayerDownAt:set(nil)
-				diagMsg(string.format("instance #%d: world layer mounted (unmounted %s s before)", refInstance:get(),
-					downAt ~= nil and string.format("%.2f", os.clock() - downAt) or "no"))
+				local wasUp = refLayerUp:get()
+				claimLayer()
+				layerEventMsg(string.format("instance #%d: world layer mounted (flag was %s, unmounted %s s before)", refInstance:get(),
+					wasUp and "up" or "down", downAt ~= nil and string.format("%.2f", os.clock() - downAt) or "no"))
 				if downAt ~= nil and os.clock() - downAt >= LAYER_GONE_SECONDS then
 					logMsg("world layer mounted again")
 					armDiagnostic()
@@ -1670,7 +1737,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 					g_layerOwnerId = 0
 					g_layerOwnerSetParam = nil
 				end
-				diagMsg(string.format("instance #%d: world layer unmounted", refInstance:get()))
+				layerEventMsg(string.format("instance #%d: world layer unmounted", refInstance:get()))
 			end)
 		end)
 		local cur = cursorState:old()
