@@ -40,10 +40,11 @@ A Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool in the bu
 - While the Underground button is on, alley trees and noise barriers are disabled and ignored: a tunnel has neither.
 - The data layers of the layers menu work with the brush open. While a data layer is on, the underground view is not drawn, as with the base tools. The Underground button still selects tunnels only.
 
-## Credits
+## Credits (the real heroes :) )
 
 - The road types, add-ons, and rules are taken from "Road Upgrade All in One" by kurowasiichi (mod.io 6487083). The headers of the copied files name the author. 24 of the road type, option, and problem texts in `strings.json` (the English and Traditional Chinese texts) are copies of the texts of that mod, with the keys renamed to `rub_*`. The road type tooltip is rewritten for the brush, and six short status texts (`rub_chip_*`) are new. The texts of the Rails mode are new too; their words for tracks, Mode, Add, Remove, Roads, and Catenary are the game's own. The road type names in the other languages are the names the game gives to its street templates. The tool icon and the mod.io image are drawn for this mod.
 - The brush, selection, highlight, and toolbar code is taken from "Bulk Bulldozer" by square17 (mod.io 6434884). The headers of the copied files name the authors. In `strings.json`, 38 texts (for example "Selection" and "%d selected") in the 12 languages besides English are the translations of that mod, and a few more in some of the languages.
+- +1, not a hero: Claude AI (Anthropic) is the development assistant of this mod (with my own control and validation), and the translation and graphics "expert" in our little "team". :)
 
 ## Translations
 
