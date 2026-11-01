@@ -2,6 +2,29 @@
 
 The checks that run outside the game. This file sits next to the mod folder, so it is not part of the uploaded mod.
 
+## Paths
+
+| Item | Value |
+|---|---|
+| Game install | `C:\Program Files (x86)\Steam\steamapps\common\Transport Fever 3\` |
+| Test mod folder parent | `C:\Program Files (x86)\Steam\userdata\56068363\3493540\local\staging_area\` (the git root and the documents sit there) |
+| Mod folder | `staging_area\kacsa_road_upgrade_brush\` |
+| Game log | `C:\Program Files (x86)\Steam\userdata\56068363\3493540\local\crash_dump\stdout.txt` (the game overwrites it at every start) |
+| Type definitions | `api\tealdef\` and `base\tealdef\` in the install folder, plus `vscode-template\` |
+| Vanilla script source | Not readable in the install folder. The unpacked copy of `gui.zip` is at `C:\Users\Kacsa\tools\tf3-gamesrc\`. |
+| Type check setup | `staging_area\tlconfig.lua` (includes the game's `api/tealdef` and `base/tealdef` and the mod's `content`) and `staging_area\all_def.tl` (copy of the game's `vscode-template`, loads `road_upgrade_brush.rub_types`) |
+
+## Mod format
+
+Source: [wiki.transportfever3.com](https://wiki.transportfever3.com).
+
+- A mod folder holds `mod.json`, an optional `strings.json`, and `content/` for resources.
+- `modId` MAY contain only `a-z`, `0-9`, and `_`. The recommended form is `<author>_<modname>`.
+- `mod.json` hooks are `preRunScript`, `runScript`, and `postRunScript`, written as `<modid>::<file>@<function>`.
+- Scripts are Lua, usually the Teal dialect (`.tl`). `local` is mandatory. Imports use `ug_require "<modid>::/path/file.tl" as TypeName`.
+- A `.res.lua` file registers a resource. The tool resource has `type = "construction_tool"` and a `getDefinitionFn` that points to a script function.
+- The mod uses `strings.json` for text, with keys per language. A text without a key shows as written in the code.
+
 ## Teal compiler
 
 - **Program:** Teal compiler `tl` 0.24.8, `C:\Users\Kacsa\tools\teal\tl-0.24.8-windows-x86_64\tl.exe`.

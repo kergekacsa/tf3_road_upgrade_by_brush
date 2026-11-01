@@ -55,7 +55,7 @@ The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[Bru
 
 ## Release files
 
-The mod folder is `kacsa_road_upgrade_brush/`. This README, the SPEC, `DEVELOPMENT-TOOLS.md` (the Teal and Lua checks), and `PUBLISHING.md` (the requirements for a mod.io upload or update) sit next to it, outside the folder that is uploaded.
+The mod folder is `kacsa_road_upgrade_brush/`. This README, `CONTEXT.md` (the terms), `ARCHITECTURE.md` (the code layout and the game facts), `docs/adr/` (the design decisions), `DEVELOPMENT-TOOLS.md` (the Teal and Lua checks), and `PUBLISHING.md` (the requirements for a mod.io upload or update) sit next to it, outside the folder that is uploaded.
 
 - `mod.json`: modId `kacsa_road_upgrade_brush`, revision 2, no dependencies.
 - `_metadata/modinfo.json`: name (25 characters), summary (93 characters), description (HTML, English), tags, and author for mod.io.

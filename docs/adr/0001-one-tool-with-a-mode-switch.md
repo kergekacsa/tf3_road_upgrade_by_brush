@@ -1,0 +1,3 @@
+# One tool with a mode switch and two menu entries
+
+Roads and Rails share one tool, with a switch at the top of the toolbar. A second tool would have to copy the selection, the blue marking, Enter, the middle-click copy, Cancel, and the retry passes. A second registration file gives the rail menu entry its own category and start mode, and both entries use the same script. If the game refused two entries from one script, the fallback would be one entry listed in both menus. A switch of the mode clears a waiting selection, because a hidden selection of the other kind would need two sets in the count, the highlight, and the cap.

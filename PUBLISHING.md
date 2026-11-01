@@ -96,7 +96,7 @@ Checked on 2026-11-01, build `bu`, before the second upload.
 
 ## Documents stay outside the mod
 
-The wiki requires that the mod holds only essential files. The README, the SPEC, `CONTEXT.md`, `PUBLISHING.md`, and `DEVELOPMENT-TOOLS.md` MUST stay in `staging_area`, next to the mod folder. The mod page text comes from `_metadata/modinfo.json`. No document is needed inside the mod.
+The wiki requires that the mod holds only essential files. The README, `CONTEXT.md`, `ARCHITECTURE.md`, `docs/adr/`, `PUBLISHING.md`, and `DEVELOPMENT-TOOLS.md` MUST stay in `staging_area`, next to the mod folder. The mod page text comes from `_metadata/modinfo.json`. No document is needed inside the mod.
 
 ## Changelog draft (revision 2)
 
