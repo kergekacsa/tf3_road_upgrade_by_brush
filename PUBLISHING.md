@@ -68,6 +68,7 @@ Official tags: Map, Savegame, Temperate, Subarctic, Dry, Tropical, Custom, Locom
 5. Write a changelog message and click Update.
 6. Back up any title or description text that you edited on mod.io. The upload overwrites them with `name` and `description` from `modinfo.json`.
 7. A change that breaks savegames of players SHOULD get a new `modId` and an independent mod, not an update.
+8. The Version column of the Files page on mod.io is not the `revision`. It showed 1.0 for the upload of revision 1 and for the update to revision 2 (2026-11-01). The publish settings of the game have no version field. The revision shows in the in-game mod details.
 
 ## Status of this mod
 
