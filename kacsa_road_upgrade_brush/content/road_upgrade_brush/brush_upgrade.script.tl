@@ -181,7 +181,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-11-01 bt"
+local BUILD <const> = "2026-11-01 bu"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -706,12 +706,14 @@ local function surfaceLayerConfig() : LayerConfig
 	return g_surfaceLayer
 end
 
-local function undergroundLayer(on : boolean) : TreeNodeId
+local function layerChild(cfg : LayerConfig) : TreeNodeId
 	local recipe = (builtin as {string : any}).LayerConfig as function(p : table) : TreeNodeId
-	if recipe == nil then return nil end
-	local cfg = on and undergroundLayerConfig() or surfaceLayerConfig()
-	if cfg == nil then return nil end
+	if recipe == nil or cfg == nil then return nil end
 	return recipe({ config = cfg })
+end
+
+local function undergroundLayer(on : boolean) : TreeNodeId
+	return layerChild(on and undergroundLayerConfig() or surfaceLayerConfig())
 end
 
 -- When the game gives no terrain position under the cursor for a while, the log says so (at most
@@ -1712,6 +1714,13 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	local actionFn = function() : TreeNodeId
 		local tWorld = perf:start()
 		local _ = versionState:old()   -- re-render on selection changes
+		-- The data layer the player picked in the layers menu (nil when none). Like every tool of the construction menu, the
+		-- world layer draws it in place of its own layer config.
+		local preferredLayer = react.useState(param.gameCtx.preferredLayerConfig:get()) as ReactStateT<LayerConfig>
+		react.onEvent("preferredLayerConfig", function(_name : string, payload : table)
+			local ev = payload as LayersButtonRidge.PreferredLayerConfigEvent
+			preferredLayer:set(ev ~= nil and ev.config or nil)
+		end)
 		-- World-layer lifecycle. The menu swaps the action to another entry's (or its "default") when the tool is
 		-- left, which unmounts this layer. An unmount not followed by a mount within LAYER_GONE_SECONDS clears the
 		-- selection (here or in onStep).
@@ -1879,7 +1888,10 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		end
 		local undergroundOn = filtersState:old().underground == true
 		if undergroundOn then refUndergroundShown:set(true) end
-		if undergroundOn or refUndergroundShown:get() then
+		local picked = layerChild(preferredLayer:old())
+		if picked ~= nil then
+			children[#children + 1] = picked
+		elseif undergroundOn or refUndergroundShown:get() then
 			local layer = undergroundLayer(undergroundOn)
 			if layer ~= nil then children[#children + 1] = layer end
 		end

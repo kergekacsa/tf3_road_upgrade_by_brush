@@ -38,6 +38,7 @@ A Transport Fever 3 mod (`kacsa_road_upgrade_brush`). It puts one tool in the bu
 - The brush gives a road the lanes of the street type you choose. With Tram track or Bus lane off, an upgrade removes a tram track or a bus lane that the road has.- The Underground button in the toolbar (or the shortcut G) switches the underground view on. While it is on, the brush selects tunnels only. While it is off, it selects roads on the ground only.
 - The brush never selects a stand-alone tram track in Roads mode. A road with tram tracks on top of its lanes is selected.
 - While the Underground button is on, alley trees and noise barriers are disabled and ignored: a tunnel has neither.
+- The data layers of the layers menu work with the brush open. While a data layer is on, the underground view is not drawn, as with the base tools. The Underground button still selects tunnels only.
 
 ## Credits
 
@@ -54,9 +55,9 @@ The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[Bru
 
 ## Release files
 
-The mod folder is `kacsa_road_upgrade_brush/`. This README, the SPEC, and `DEVELOPMENT-TOOLS.md` (the Teal and Lua checks) sit next to it, outside the folder that is uploaded.
+The mod folder is `kacsa_road_upgrade_brush/`. This README, the SPEC, `DEVELOPMENT-TOOLS.md` (the Teal and Lua checks), and `PUBLISHING.md` (the requirements for a mod.io upload or update) sit next to it, outside the folder that is uploaded.
 
-- `mod.json`: modId `kacsa_road_upgrade_brush`, revision 1, no dependencies.
+- `mod.json`: modId `kacsa_road_upgrade_brush`, revision 2, no dependencies.
 - `_metadata/modinfo.json`: name (25 characters), summary (93 characters), description (HTML, English), tags, and author for mod.io.
 - `_metadata/0.png`: the cover (1920 x 1080): a screenshot of the game with the title card.
 - `_metadata/1.png`: a gallery picture (1920 x 1080): the same screenshot without the card.
