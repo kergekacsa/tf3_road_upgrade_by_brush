@@ -127,12 +127,20 @@ local function edgeFull(d : RubDesc, cache : RubGatherCache) : RubDesc
 	if d.full then return d end
 	d.full = true
 	local e = d.entity
-	d.owner = ownerOf(e)
+	-- A read that fails leaves the edge unreadable, and an unreadable edge is skipped.
+	local okO, po = pcall(function() : Engine.Component.PlayerOwned
+		return api.engine.getComponent(e, api.type.ComponentType.PLAYER_OWNED) as Engine.Component.PlayerOwned
+		end)
 	local okC, con = pcall(api.engine.system.streetConnectorSystem.getConstructionEntityForEdge, e)
-	d.parentConstruction = (okC and con ~= nil) and con or -1
+	if not okO or not okC then
+		d.gone = true
+		return d
+	end
+	d.owner = (po ~= nil and po.player ~= nil) and po.player or -1
+	d.parentConstruction = con ~= nil and con or -1
 	d.isStreet = comp(e, api.type.ComponentType.BASE_EDGE_STREET) ~= nil
 	if d.isStreet then d.tramOnly = isTramOnly(e) end
-	-- An unowned street that ends on a node of an industry construction is an industry access road.
+	-- An unowned road or track that ends on a node of an industry construction is an industry access road.
 	if d.owner < 0 and d.parentConstruction < 0 then
 		d.industryRoad = conIsIndustry(nodeConstruction(d.node0), cache)
 			or conIsIndustry(nodeConstruction(d.node1), cache)

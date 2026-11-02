@@ -123,10 +123,10 @@ local function isOwned(owner : integer) : boolean
 	return owner ~= nil and owner >= 0
 end
 
--- Streets freed from a street construction (e.g. a roundabout) have no PLAYER_OWNED.
+-- A road or a track without PLAYER_OWNED is still a road or a track. An unowned one at an industry is skipped by the
+-- industry rule.
 local function edgeKind(d : RubDesc) : RubKind
-	if d.isStreet then return "road" end
-	return isOwned(d.owner) and "track" or "other"
+	return d.isStreet and "road" or "track"
 end
 
 local function constructionKind(d : RubDesc) : RubKind

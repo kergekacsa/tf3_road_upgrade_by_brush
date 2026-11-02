@@ -31,7 +31,7 @@ end
 --- true = that kind may be selected.
 global record RubFilters
 	roads : boolean          -- every street that is ours or has no PLAYER_OWNED; never another player's
-	tracks : boolean         -- our edges without BASE_EDGE_STREET
+	tracks : boolean         -- every track (edge without BASE_EDGE_STREET) that is ours or has no PLAYER_OWNED; never another player's
 	stations : boolean       -- our constructions with stations or depots
 	assets : boolean         -- our other constructions (placed assets etc.)
 	townBuildings : boolean  -- unowned constructions that are only town buildings
@@ -75,12 +75,12 @@ end
 
 global enum RubKind
 	"road"           -- a street, ours or unowned (town roads included)
-	"track"          -- our track
+	"track"          -- a track, ours or unowned
 	"station"        -- our station or depot construction
 	"asset"          -- our other construction
 	"town_building"  -- town building construction
 	"industry"       -- industry construction (never kept)
-	"other"          -- anything else (unowned track, landmark, mission prop; never kept)
+	"other"          -- a construction that is none of the above (landmark, mission prop; never kept)
 end
 
 global enum RubReason
@@ -89,7 +89,7 @@ global enum RubReason
 	"part"           -- belongs to a construction (goes with it)
 	"industry"       -- industry construction or industry road
 	"hq"             -- our headquarters
-	"not_player"     -- unowned and not a town road / town building
+	"not_player"     -- an unowned construction that is not a town building
 	"filtered"       -- its kind's toolbar filter is off
 	"underground"    -- tunnel edge with "Underground" off
 	"surface"        -- edge on the ground while the underground view is on
