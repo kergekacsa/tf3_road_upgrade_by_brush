@@ -7,7 +7,7 @@ local templates = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_
 local gridBuilder : RubGridBuilderModule = {}
 
 local LOG_TAG <const> = "[BrushUpgrade] [grid]"
-local BUILD_MARK <const> = "2026-11-02 sixblocks"
+local BUILD_MARK <const> = "2026-11-02 sideandlength"
 local DEFAULT_BLOCKS_ALONG <const> = 6
 local DEFAULT_BLOCKS_LEFT <const> = 8
 local DEFAULT_BLOCK_LENGTH_ALONG_M <const> = 144
@@ -28,6 +28,7 @@ local SEGMENT_TYPE_STREET <const> = 0
 local ROUNDING_STEPS <const> = 100
 local STUB_LENGTH_M <const> = 30
 local MIN_DIRECTION_LENGTH <const> = 0.001
+local FIT_TOLERANCE <const> = 1e-9
 local STUB_REMOVE <const> = "remove"
 local STUB_KEEP <const> = "keep"
 local STUB_OFF <const> = "off"
@@ -74,17 +75,31 @@ local function rounded(value : number) : number
 	return math.floor(value * ROUNDING_STEPS + 0.5) / ROUNDING_STEPS
 end
 
+-- The most blocks whose total length does not exceed maxLengthM.
+local function blocksFitting(maxLengthM : number, blockLengthM : number) : integer
+	local blocks = math.floor(maxLengthM / blockLengthM + FIT_TOLERANCE)
+	assert(blocks >= 1, LOG_TAG .. " length_shorter_than_one_block")
+	return blocks
+end
+
 local function withDefaults(options : RubGridOptions) : RubGridOptions
 	local given : RubGridOptions = options or {}
 	local largeEveryAlong = given.largeEveryAlong or DEFAULT_LARGE_EVERY_ALONG
 	local largeEveryLeft = given.largeEveryLeft or DEFAULT_LARGE_EVERY_LEFT
 	local explicitNodeConfigs = given.explicitNodeConfigs
 	if explicitNodeConfigs == nil then explicitNodeConfigs = largeEveryAlong > 0 or largeEveryLeft > 0 end
+	local blockLengthAlongM = given.blockLengthAlongM or DEFAULT_BLOCK_LENGTH_ALONG_M
+	local blockLengthLeftM = given.blockLengthLeftM or DEFAULT_BLOCK_LENGTH_LEFT_M
+	local blocksAlong = given.blocksAlong or DEFAULT_BLOCKS_ALONG
+	local blocksLeft = given.blocksLeft or DEFAULT_BLOCKS_LEFT
+	if given.maxLengthAlongM ~= nil then blocksAlong = blocksFitting(given.maxLengthAlongM, blockLengthAlongM) end
+	if given.maxLengthLeftM ~= nil then blocksLeft = blocksFitting(given.maxLengthLeftM, blockLengthLeftM) end
 	return {
-		blocksAlong = given.blocksAlong or DEFAULT_BLOCKS_ALONG,
-		blocksLeft = given.blocksLeft or DEFAULT_BLOCKS_LEFT,
-		blockLengthAlongM = given.blockLengthAlongM or DEFAULT_BLOCK_LENGTH_ALONG_M,
-		blockLengthLeftM = given.blockLengthLeftM or DEFAULT_BLOCK_LENGTH_LEFT_M,
+		blocksAlong = blocksAlong,
+		blocksLeft = blocksLeft,
+		blockLengthAlongM = blockLengthAlongM,
+		blockLengthLeftM = blockLengthLeftM,
+		buildToRight = given.buildToRight or false,
 		flipStripDirection = given.flipStripDirection or false,
 		cameraSearchRadiusM = given.cameraSearchRadiusM or DEFAULT_CAMERA_SEARCH_RADIUS_M,
 		nodeSnapRadiusM = given.nodeSnapRadiusM or DEFAULT_NODE_SNAP_RADIUS_M,
@@ -123,13 +138,15 @@ local function nodePosition(node : integer) : Vec3f
 end
 
 -- The grid starts at the second node of the strip and runs in the direction from the first node to the second.
-local function stripFrame(strip : Engine.Component.BaseEdge, flip : boolean) : Frame
+-- The side direction ("left" in the rest of this file) points to the right of the heading when toRight is true.
+local function stripFrame(strip : Engine.Component.BaseEdge, flip : boolean, toRight : boolean) : Frame
 	local first, last = nodePosition(strip.node0), nodePosition(strip.node1)
 	if flip then first, last = last, first end
 	local dx, dy = last.x - first.x, last.y - first.y
 	local length = math.sqrt(dx * dx + dy * dy)
 	local forwardX, forwardY = dx / length, dy / length
-	return { originX = last.x, originY = last.y, forwardX = forwardX, forwardY = forwardY, leftX = -forwardY, leftY = forwardX }
+	local side = toRight and -1 or 1
+	return { originX = last.x, originY = last.y, forwardX = forwardX, forwardY = forwardY, leftX = -forwardY * side, leftY = forwardX * side }
 end
 
 local function worldXY(plan : Plan, alongIndex : integer, leftIndex : integer) : number, number
@@ -511,7 +528,7 @@ end
 local function newPlan(options : RubGridOptions) : Plan, integer, number
 	local stripId, cameraDistance = findStrip(options.cameraSearchRadiusM)
 	local strip = api.engine.getComponent(stripId, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
-	local frame = stripFrame(strip, options.flipStripDirection)
+	local frame = stripFrame(strip, options.flipStripDirection, options.buildToRight)
 	local stripTemplateName = strip.roadTemplate
 	local stripTypeIndex = strip.typeIndex
 	local stripDistance = strip.distance
@@ -544,7 +561,7 @@ function gridBuilder.build(options : RubGridOptions)
 	local plan, stripId, cameraDistance = newPlan(withDefaults(options))
 	local fits = gridFitsMap(plan)
 	print(LOG_TAG, "strip", stripId, "camera_distance", rounded(cameraDistance), "corner", rounded(plan.frame.originX), rounded(plan.frame.originY),
-		"heading", rounded(plan.frame.forwardX), rounded(plan.frame.forwardY), "segments", #plan.segments, "fits_map", tostring(fits), "build", BUILD_MARK)
+		"heading", rounded(plan.frame.forwardX), rounded(plan.frame.forwardY), "segments", #plan.segments, "blocks", plan.options.blocksAlong, plan.options.blocksLeft, "side", plan.options.buildToRight and "right" or "left", "fits_map", tostring(fits), "build", BUILD_MARK)
 	print(LOG_TAG, "templates", describeTemplate(plan.stripTemplateName), describeTemplate(plan.largeTemplateName))
 	if fits then buildBatch(plan, 1, 1) end
 end

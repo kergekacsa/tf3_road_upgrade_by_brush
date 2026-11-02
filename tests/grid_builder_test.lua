@@ -253,7 +253,7 @@ support.check("one command per segment: 110 commands", east.commands == GRID_EDG
 support.check("a command is sent only after the previous one finished", east.sequential)
 support.check("the search is a circle of 150 m around the camera centre over edges",
   east.octreeCalls[1].centre.x == 145 and east.octreeCalls[1].centre.y == 197 and east.octreeCalls[1].radius == 150 and east.octreeCalls[1].component == "BASE_EDGE")
-support.check("the first log line ends with the build mark of the module", east.out[1]:find("build 2026-11-02 sixblocks", 1, true) ~= nil, east.out[1])
+support.check("the first log line ends with the build mark of the module", east.out[1]:find("build 2026-11-02 sideandlength", 1, true) ~= nil, east.out[1])
 support.check("the log names the strip nearest to the camera", east.out[1]:find("strip 7 ", 1, true) ~= nil and east.out[1]:find("corner 180", 1, true) ~= nil, east.out[1])
 support.check("a finished command logs its segment numbers and how many of them are large", east.out[3]:find("built 1 1 large 1", 1, true) ~= nil and east.out[4]:find("built 2 2 large 1", 1, true) ~= nil, east.out[3] .. " | " .. east.out[4])
 support.check("the log names both templates with their lot flags", east.out[2]:find("templates", 1, true) ~= nil and east.out[2]:find("town_medium simBuildable=", 1, true) ~= nil and east.out[2]:find(LARGE_NEW .. " simBuildable=", 1, true) ~= nil, east.out[2])
@@ -321,6 +321,36 @@ local minXF, maxXF, minYF, maxYF = bounds(flipped.world)
 support.check("FLIP: the first edge starts at the first strip node", flipped.world.applied[1].edges[1].n0 == 10)
 support.check("FLIP: new nodes run west and south from (100,200)", near(maxXF, 100) and near(minXF, 100 - ALONG * ALONG_M) and near(maxYF, 200) and near(minYF, 200 - LEFT * LEFT_M),
   string.format("%g %g %g %g", minXF, maxXF, minYF, maxYF))
+
+-- buildToRight puts the side of the grid to the right of the heading.
+local toRight = runWorld(vec(100, 200, 0), vec(180, 200, 0), { buildToRight = true })
+local minXR, maxXR, minYR, maxYR = bounds(toRight.world)
+support.check("buildToRight: the east heading grid spans y 200 down to -504 and keeps x 180 to 1044", toRight.ok and toRight.commands == GRID_EDGES and near(minXR, 180) and near(maxXR, 180 + ALONG * ALONG_M)
+  and near(maxYR, 200) and near(minYR, 200 - LEFT * LEFT_M), string.format("%g %g %g %g", minXR, maxXR, minYR, maxYR))
+support.check("buildToRight: the log names the side", toRight.out[1]:find("side right", 1, true) ~= nil and east.out[1]:find("side left", 1, true) ~= nil, toRight.out[1])
+local rightLarge, leftLarge = 0, 0
+for _, record in ipairs(toRight.world.applied) do
+  for _, item in ipairs(record.edges) do
+    if item.edge.comp.roadTemplate == LARGE_NEW then rightLarge = rightLarge + 1 end
+  end
+end
+for _, record in ipairs(east.world.applied) do
+  for _, item in ipairs(record.edges) do
+    if item.edge.comp.roadTemplate == LARGE_NEW then leftLarge = leftLarge + 1 end
+  end
+end
+support.check("buildToRight: the same streets are large as on the left side", rightLarge == leftLarge and rightLarge == 3 * ALONG + 3 * LEFT, rightLarge .. " " .. leftLarge)
+
+-- maxLengthAlongM and maxLengthLeftM give the most blocks that fit under the length.
+local fitted = runWorld(vec(100, 200, 0), vec(180, 200, 0), { maxLengthAlongM = 600, maxLengthLeftM = 500 })
+support.check("max lengths: 600 m along fit 4 blocks of 144 m, 500 m to the side fit 5 blocks of 88 m", fitted.ok and fitted.commands == 4 * (5 + 1) + 5 * (4 + 1)
+  and fitted.out[1]:find("blocks 4 5", 1, true) ~= nil, fitted.commands .. " " .. fitted.out[1])
+local fitsExactly = runWorld(vec(100, 200, 0), vec(180, 200, 0), { maxLengthAlongM = 6 * ALONG_M, maxLengthLeftM = 8 * LEFT_M })
+support.check("max lengths: a length equal to whole blocks keeps all of them", fitsExactly.ok and fitsExactly.out[1]:find("blocks 6 8", 1, true) ~= nil, fitsExactly.out[1])
+local lengthWins = runWorld(vec(100, 200, 0), vec(180, 200, 0), { blocksAlong = 2, maxLengthAlongM = 600 })
+support.check("max lengths: the length replaces the block count", lengthWins.ok and lengthWins.out[1]:find("blocks 4 8", 1, true) ~= nil, lengthWins.out[1])
+local tooShort = runWorld(vec(100, 200, 0), vec(180, 200, 0), { maxLengthAlongM = 100 })
+support.check("max lengths: a length under one block is an error and nothing is built", not tooShort.ok and tostring(tooShort.err):find("length_shorter_than_one_block", 1, true) ~= nil and tooShort.commands == 0, tostring(tooShort.err))
 
 -- A failed command stops the run and reports where.
 local failing = runWorld(vec(100, 200, 0), vec(180, 200, 0), nil, { first = 5, count = 3 })
@@ -519,6 +549,15 @@ local byDefaultPlain = runWorld(vec(100, 200, 0), vec(180, 200, 0), { defaultBen
 support.check("default without large streets: no stub", byDefaultPlain.commands == GRID_EDGES)
 local byDefaultNoConfigs = runWorld(vec(100, 200, 0), vec(180, 200, 0), { defaultBend = true, explicitNodeConfigs = false })
 support.check("default with explicitNodeConfigs=false: no stub", byDefaultNoConfigs.commands == GRID_EDGES)
+local rightStubs = runWorld(vec(100, 200, 0), vec(180, 200, 0), { defaultBend = true, buildToRight = true })
+local rightEnds = {}
+for corner = 1, 3 do
+  local buildRecord = rightStubs.world.applied[GRID_EDGES + corner * 2 - 1]
+  local stub = buildRecord and buildRecord.edges[1]
+  if stub then rightEnds[corner] = stub.edge.comp.position1 end
+end
+support.check("buildToRight: a stub is built and removed at each corner, pointing away from the grid", rightStubs.commands == GRID_EDGES + 6 and countEdges(rightStubs) == GRID_EDGES
+  and #rightEnds == 3 and rightEnds[1].x > 1044 and rightEnds[2].y < 200 - LEFT * LEFT_M + 1 and rightEnds[2].x < 180 and rightEnds[3].x > 1044 and rightEnds[3].y < 200 - LEFT * LEFT_M + 1, rightStubs.commands)
 local stubFails = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "remove" }, GRID_EDGES + 1)
 support.check("a stub that the game refuses is logged and the next corner still runs", stubFails.ok and stubFails.commands == GRID_EDGES + 5
   and logText(stubFails):find("bend_stub 6:0 failed Collision", 1, true) ~= nil and stubFails.out[#stubFails.out]:find("done 110", 1, true) ~= nil, stubFails.commands)

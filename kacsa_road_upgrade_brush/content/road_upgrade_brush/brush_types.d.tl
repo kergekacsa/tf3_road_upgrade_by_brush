@@ -168,6 +168,12 @@ global record RubGridOptions
 	blockLengthAlongM : number
 	--- Length of a block to the left, in metres (88).
 	blockLengthLeftM : number
+	--- Longest total length along the heading, in metres, measured between the centre lines of the outer streets. The grid gets the most blocks that fit, at least 1, and the value replaces blocksAlong. Not set by default.
+	maxLengthAlongM : number
+	--- Longest total length to the side, in metres, counted like maxLengthAlongM. It replaces blocksLeft. Not set by default.
+	maxLengthLeftM : number
+	--- true builds the grid to the right of the heading instead of the left (false). Every "left" in the other options then means the right.
+	buildToRight : boolean
 	--- true starts the grid at the first node of the strip and runs it the other way (false).
 	flipStripDirection : boolean
 	--- Radius around the camera centre in which the strip is searched, in metres (150).
