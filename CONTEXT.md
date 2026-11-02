@@ -29,7 +29,7 @@ One of the three types the Rails mode offers: simple, standard or high speed. Ea
 _Avoid_: Rail type, rail template
 
 **Base track template**:
-One of the six street templates of the game that make up the track types. A track with any other template is never selected or changed. The quiet copy of a base track template, made by the mod Station Noise Barriers, counts as that template when it is read. It belongs to a station, so the brush does not select it.
+One of the six street templates of the game that make up the track types. A track with any other template is never selected or changed. The quiet copy of a base track template, made by the mod Station Noise Barriers, counts as that template when it is read. The brush skips it when it belongs to a construction. Otherwise an upgrade swaps it to the base template of the target.
 _Avoid_: Supported template, known track
 
 **Road type**:

@@ -1,8 +1,8 @@
 # Publishing to mod.io
 
-This file sits next to the mod folder, so it is not part of the uploaded mod. It records what Transport Fever 3 requires to publish a mod or to update one, and the status of this mod against each requirement.
+This file sits next to the mod folder, so it is not part of the uploaded mod. It is the guide for a release: what Transport Fever 3 requires to publish a mod or to update one, and the steps to follow.
 
-Sources (read on 2026-11-01):
+Sources:
 
 - [Publish a Mod](https://wiki.transportfever3.com/doku.php?id=modding:general:publishing)
 - [Guidelines & Requirements](https://wiki.transportfever3.com/doku.php?id=modding:general:guidelines)
@@ -51,9 +51,27 @@ The cover guideline for script mods allows a screenshot of the GUI, graphic over
 
 Official tags: Map, Savegame, Temperate, Subarctic, Dry, Tropical, Custom, Locomotive, Wagon, Multiple Unit, Bus, Truck, Tram, Ship, Plane, Helicopter, Rail Station, Road Station, Airport/Heliport, Port, Track, Road, Bridge, Tunnel, Signal, Rail Crossing, Road Construction, Track Construction, Industry, Town Building, Warehouse, Landmark, Depot, Maintenance Building, Vegetation, Rock, Other Asset, Script Mod, Car, Resident, Animal, Sound, Shader.
 
+## Documents stay outside the mod
+
+The wiki requires that the mod holds only essential files. The README, `CONTEXT.md`, `ARCHITECTURE.md`, `docs/adr/`, `PUBLISHING.md`, `DEVELOPMENT-TOOLS.md`, `CLAUDE.md`, and `tests/` MUST stay in `staging_area`, next to the mod folder. The mod page text comes from `_metadata/modinfo.json`. No document is needed inside the mod.
+
+## Checks before every upload
+
+Run these on the exact build that you upload. The commands are in `DEVELOPMENT-TOOLS.md`.
+
+1. The changes of the release are committed.
+2. The Teal type check of every script reports 0 errors and 0 warnings.
+3. `luac55 -p` reports no syntax error for the generated Lua and for the `.lua` files of the mod.
+4. No file has a BOM. `mod.json`, `modinfo.json`, and `strings.json` parse.
+5. `node build.js --check` in `strings-gen` reports "check ok".
+6. `tests\run.ps1` reports that all test files passed.
+7. `mod.json` holds the right `revision`. `severityAdd` and `severityRemove` are `None` when the mod saves nothing in a savegame. Every debug option has `defaultIndex` 0 (Off).
+8. The mod folder has no executables, no source assets, no temporary files, and no uppercase letter or space in a name.
+9. Start the game with this build and use the mod once with each debug option On. Then read `crash_dump\stdout.txt` for errors. A changelog line MUST say "Fixed" only when someone saw the failure before the change and could not make it happen after, by manual test or by log. If the failure could not be made to happen again, the line SHOULD say "should no longer".
+
 ## First upload
 
-1. Copy the mod folder to `staging_area` in the userdata folder (already done).
+1. Copy the mod folder to `staging_area` in the userdata folder.
 2. Start the game and open the Mod Hub, then My Mods.
 3. Select the mod. Adjust name, tags, cover, gallery, and visibility.
 4. Click Upload at the bottom left. The game validates the mod first.
@@ -65,52 +83,11 @@ Official tags: Map, Savegame, Temperate, Subarctic, Dry, Tropical, Custom, Locom
 2. Keep `_metadata/mod.io_fileid.txt`. It holds the mod.io entry id. If the file is lost, create it again with the id from the info box on the right of the mod page.
 3. Open the Mod Hub, then My Mods, and select the mod.
 4. Check the box at the bottom left. It MUST read "The existing mod on mod.io will be updated" next to the Update button. If it does not, the file id is missing.
-5. Write a changelog message and click Update.
-6. Back up any title or description text that you edited on mod.io. The upload overwrites them with `name` and `description` from `modinfo.json`.
-7. A change that breaks savegames of players SHOULD get a new `modId` and an independent mod, not an update.
-8. The Version column of the Files page on mod.io is not the `revision`. It showed 1.0 for the upload of revision 1 and for the update to revision 2 (2026-11-01). The publish settings of the game have no version field. The revision shows in the in-game mod details.
+5. Back up any title or description text that you edited on mod.io. The upload overwrites them with `name` and `description` from `modinfo.json`.
+6. Write a changelog message and click Update.
+7. After the upload, check that `_metadata/mod.io_fileid.txt` still holds the same id and that the mod page shows the new revision.
 
-## Status of this mod
+Notes:
 
-Checked on 2026-11-01, build `bu`, before the second upload.
-
-| # | Item | Status |
-|---|---|---|
-| 1 | Name 25 characters, summary 93 characters | OK |
-| 2 | Tags: Track, Town Building, Track Construction, Script Mod, Road, Road Construction | OK, all in the official list |
-| 3 | `0.png`, `1.png`, `2.png` are 1920 x 1080 PNG, each 4.3 to 4.7 MB | OK |
-| 4 | Description in English, with headers, bold, and lists, with no table or image | OK |
-| 5 | Mod folder size 16 MB, no executables, no source assets, no uppercase or space in names | OK |
-| 6 | No BOM in `.tl`, `.lua`, `.json`. `mod.json`, `modinfo.json`, `strings.json` parse | OK |
-| 7 | Teal type check of all 16 scripts, 0 errors. `luac55 -p` on the generated Lua and the `.lua` files, no syntax error | OK |
-| 8 | `node build.js --check` in `strings-gen`: check ok, 42 keys in 12 languages | OK |
-| 9 | `probe.ENABLED = false` | OK |
-| 10 | `severityAdd` and `severityRemove` are `None`. The mod saves nothing in a savegame | OK |
-| 11 | `mod.io_fileid.txt` is present (entry 6495139), so this is an update | OK |
-| 12 | `revision` in `mod.json` raised from 1 to 2 | Done |
-| 13 | Layer change (data layers with the brush open) committed | Open: commit before the upload |
-| 14 | Data layers and the stuck ring tested in the game | Layers: tested, working (user). Stuck ring: not seen again |
-| 15 | Changelog message | Draft below |
-| 16 | Backup of title and description edits on mod.io | Open: check the mod page first |
-| 17 | Permission of square17 and kurowasiichi for the copied code | OK, confirmed by the author. The credits are in the description and in the file headers |
-| 18 | `image_00.jpg` in the mod root | OK, kept on purpose. The wiki does not name this file |
-
-## Documents stay outside the mod
-
-The wiki requires that the mod holds only essential files. The README, `CONTEXT.md`, `ARCHITECTURE.md`, `docs/adr/`, `PUBLISHING.md`, and `DEVELOPMENT-TOOLS.md` MUST stay in `staging_area`, next to the mod folder. The mod page text comes from `_metadata/modinfo.json`. No document is needed inside the mod.
-
-## Changelog draft (revision 2)
-
-```text
-- The data layers of the layers menu now work while the brush is open.
-- Fixed: the brush circle could stay fixed on the map after switching the Underground button or the layers.
-- The tool starts from its default state each time you open it. The brush radius is kept.
-```
-
-## Before the upload
-
-1. Commit the open changes (item 13).
-2. Run the checks again if a script changed. The commands are in `DEVELOPMENT-TOOLS.md`.
-3. Confirm item 16.
-4. Start the game, open the Mod Hub, and upload with the changelog.
-5. Check that the new `_metadata/mod.io_fileid.txt` still holds the same id and that the mod page shows revision 2.
+- A change that breaks savegames of players SHOULD get a new `modId` and an independent mod, not an update.
+- The Version column of the Files page on mod.io is not the `revision`. The publish settings of the game have no version field. The revision shows in the in-game mod details.

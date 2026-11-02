@@ -40,6 +40,14 @@ Source: [wiki.transportfever3.com](https://wiki.transportfever3.com).
 - **Use:** `luac55 -p <file>.lua` parses a file and prints syntax errors without running it. Run it on the Lua that `tl gen` produced.
 - **Limit:** the script runtime of the game may use another Lua version. The check proves only that the syntax is sound.
 
+## Tests
+
+- **Run:** `.\tests\run.ps1` from the staging folder. It needs the Teal compiler above and `lua55` on the PATH. The variable `$env:TL` replaces the compiler path.
+- **What it does:** `tl gen` compiles the modules listed in `$modules` of `run.ps1` into `tests/.build/` (ignored by git), after it empties that folder. Each `tests/*_test.lua` runs with `lua55` against a stub of the game's `api`.
+- **Files:** `support.lua` (module loading and the check function) and the `*_test.lua` files. `commit_flow_test.lua` tests `bb_upgrade.tl` with the real `bb_select.tl` and `proposal_probe.tl` against a stub of the game that records every command and every read of the game `api`. The reads of `bb_gather.tl` are not recorded, because the test replaces that module by a stub that describes the edges. The tests cannot load `brush_upgrade.script.tl`, so the calls of that script into the modules are not tested.
+- **New module:** add its name to `$modules` in `run.ps1` and cover it in a `*_test.lua` file. One test file MAY cover several modules.
+- **Limit:** the tests prove the logic of the mod. They do not prove that the game accepts a call.
+
 ## What these checks do not prove
 
 - They do not prove that the game accepts a call at run time. The Teal definitions can be incomplete or differ from the engine. Examples are `getAsTable` missing in the tool, and the `constructionsToRemove` crash.
