@@ -90,12 +90,70 @@ global record RubStyle
 	--- yellow, "ok" green, anything else leaves the colour as the style sheet sets it).
 	meta : function(fontClass : string, severity : string) : Meta
 end
+--- What `before` reads of a road, to find the same road again after its command.
+global record RubProbeWatch
+	edge : integer
+	attempt : integer
+	--- The two end points of the old road, as x, y, z, x, y, z.
+	ends : {number}
+	oldText : string
+	--- Metres: the radius of the octree query that finds the road again.
+	radius : number
+end
+-- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_layer.tl" as RubLayer
+global record RubLayer
+	--- Seconds. An owner whose layer was not seen alive for this long counts as gone.
+	OWNER_STALE_SECONDS : number
+	--- Seconds. An unmounted layer counts as closed once it stays unmounted this long.
+	GONE_SECONDS : number
+	--- Seconds. A tool state passed in by the newest instance stays this long.
+	PUSH_GRACE_SECONDS : number
+	--- Seconds. A click is a stuck ring when the step did not update the ring for this long.
+	STUCK_RING_AFTER : number
+	--- Metres. A click is a stuck ring when the ring is farther than this from the terrain position under the pointer.
+	STUCK_RING_OFFSET : number
+	--- The instance number of the owner of the mounted world layer; 0 = none.
+	owner : function() : integer
+	--- true while the world layer of instance `me` is mounted.
+	isUp : function(me : integer) : boolean
+	--- The layer of `me` is mounted: `me` becomes the owner. `setParam` hands a tool state to `me`. Returns whether the layer was marked mounted before, the seconds it had been unmounted (nil when it never was, or when the tool forgot the unmount), and whether that counts as closed. A mount replaces the mark of a mouse claim.
+	mount : function(me : integer, now : number, setParam : function(any)) : boolean, number, boolean
+	--- One layer of `me` is unmounted. When none is left mounted, `me` stops being the owner. Two layers that stay mounted for GONE_SECONDS after the last mount count as one.
+	unmount : function(me : integer, now : number)
+	--- `me` is gone (its recipe unmounted): drops its state, and `me` stops being the owner.
+	forget : function(me : integer)
+	--- The step of `me`. `active`: the tool is active. `activated`: it became active in this step. An inactive or just activated tool forgets that its layer went down. Returns whether the layer has stayed unmounted for GONE_SECONDS (the tool was switched; true once, the unmount is forgotten) and whether the layer of `me` is mounted. An inactive tool does not count as alive. A mounted layer of an active tool keeps the owner alive.
+	step : function(me : integer, now : number, active : boolean, activated : boolean) : boolean, boolean
+	--- The newest instance `me` hands `state` to the owner when its own layer is not mounted. Returns true when it did. It does not check when the owner stepped last; a mouse event of another instance takes the layer from an owner that stopped stepping.
+	passState : function(me : integer, newest : integer, now : number, state : any) : boolean
+	--- true when the params of the menu reach `me` again, which is after PUSH_GRACE_SECONDS since a newer instance passed its state in.
+	acceptsParam : function(me : integer, now : number) : boolean
+	--- A mouse event reached `me`. Returns "up" (its layer is mounted), "blocked" (another owner was seen alive less than OWNER_STALE_SECONDS ago: ignore the event), "claimed" (the layer was marked mounted again) or "grace" (the layer went down less than GONE_SECONDS ago). The second value is a log line, for the first blocked event of an episode (at most 20 per session) and for a claim; else nil.
+	mouse : function(me : integer, now : number, setParam : function(any)) : string, string
+	--- true when a click is a stuck ring: the step did not update the ring (`stepAt` nil: never) for STUCK_RING_AFTER, or the ring (nil: none) is farther than STUCK_RING_OFFSET from the terrain position under the pointer (nil: none).
+	ringStuck : function(stepAt : number, now : number, ringX : number, ringY : number, liveX : number, liveY : number) : boolean
+end
+--- The probe of one press. Every function does nothing for an edge that has no watch (option Off, road unreadable).
+global record RubProbePress
+	--- The road `edge` starts attempt number `attempt` (0 = first pass).
+	road : function(edge : integer, attempt : integer)
+	--- Logs the line of the road before its command. `p` is nil when no proposal was built. `commands` is the number of commands sent so far.
+	proposal : function(edge : integer, p : Proposal, commands : integer)
+	--- Logs the road found at the end points of `edge`, with the text that `state` returns appended. `state` runs only when the edge has a watch.
+	after : function(edge : integer, state : function() : string)
+end
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as RubProposalProbe
 global record RubProposalProbe
-	--- Switch for all diagnostics of the mod (this probe and the diagnostic lines of the brush tool); false = off.
-	ENABLED : boolean
-	--- Logs the proposal of a construction action while the cursor is over a road (does nothing unless ENABLED).
-	install : function(params : Builtin.ConstructionActionParam)
-	--- One line about a segment of a proposal: edge type, road development lock, decorations, lanes.
-	segmentText : function(seg : Proposal.SegmentAndEntity) : string
+	--- Reads the option "Debug: upgrade log" and keeps the answer. true = On.
+	refresh : function() : boolean
+	--- The answer of the last refresh (reads the option once when there was none). Does no other work.
+	enabled : function() : boolean
+	--- Starts the line count of a press and refreshes the option.
+	beginPress : function()
+	--- The text with a "[category]" tag in front while the option is On, else the text unchanged.
+	tag : function(category : string, text : string) : string
+	--- Logs the proposal of the base game tool named `tool` (an action id) while the cursor is over a road (does nothing while the option is Off). Params that already carry the hook are skipped.
+	install : function(params : Builtin.ConstructionActionParam, tool : string)
+	--- Reads every road of `edges` now (option On only) and returns the handle of the press. It MUST NOT run in a command callback. Every call of the handle is protected: an error in it never reaches the caller.
+	press : function(edges : {integer}) : RubProbePress
 end

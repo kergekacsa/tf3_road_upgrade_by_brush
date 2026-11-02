@@ -1,6 +1,6 @@
 {
   "modId": "kacsa_road_upgrade_brush",
-  "revision": 2,
+  "revision": 3,
   "dependencies": null,
   "incompatibilities": null,
   "options": null,
@@ -23,6 +23,17 @@
       "key": "sqperf_log",
       "name": "Debug: performance log",
       "tooltip": "Off: normal play. On: every 30 s, this mod writes how long its brush samples, previews and tool renders took to the game's log file (stdout.txt, lines starting with [SQPERF]), plus its detailed mouse-event log. Only for tracking down slowdowns; leave it Off otherwise. Slow calls are always logged briefly, whatever this setting.",
+      "uiType": "Button",
+      "values": [
+        "Off",
+        "On"
+      ],
+      "defaultIndex": 0
+    },
+    {
+      "key": "rub_log",
+      "name": "Debug: upgrade log",
+      "tooltip": "Off: normal play. On: when this mod upgrades roads, it also writes the old road, the proposal and the new road of each road to the game's log file (stdout.txt). These extra lines start with [BrushUpgrade] [probe]. The other lines of an upgrade get the tag [upgrade] or [failure]. The number of lines is capped. Use it for bug reports; leave it Off otherwise. On also logs the tool instances, the world layer, the cursor, and the proposals of the base game tools for upgrade, bus lane, and tram track.",
       "uiType": "Button",
       "values": [
         "Off",

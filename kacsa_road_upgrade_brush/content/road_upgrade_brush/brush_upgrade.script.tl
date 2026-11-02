@@ -24,6 +24,7 @@ local brushOptions = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/b
 local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as RubStyle
 local brushClone = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_clone.tl" as RubBrushClone
 local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as RubProposalProbe
+local layerOwner = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_layer.tl" as RubLayer
 
 local PREFIX <const> = "[BrushUpgrade] "
 local EV_RADIUS <const> = "BrushUpgrade.radius"
@@ -81,9 +82,6 @@ local DEBUG_OCTREE <const> = false
 local RMB_CLICK_MAX_PX <const> = 16
 -- The same for the middle button, which copies the road under the pointer.
 local MMB_CLICK_MAX_PX <const> = 16
--- The world layer (actionFn) counts as closed once it stays unmounted this long (os.clock s). An
--- unmount followed by a mount in the same frame (re-binding) is not a close.
-local LAYER_GONE_SECONDS <const> = 0.25
 -- Held at the LMB press: the stroke removes from the selection (base hold modifier, Shift by default).
 
 local IA_ERASE <const> = "IA_PRECISION_MODE"
@@ -122,6 +120,18 @@ local type GetActionParams = function(definition : ConstructionDefinition, param
 
 local g_paramsRef : ReactRefWrapApiT<any, ConstructionMenuParamsAPI> = nil
 local g_captureInstalled = false
+local BASE_UPGRADE_ACTION <const> = "ACTION_STREET_BUILDER_UPGRADER"
+-- The value of the base game's street builder param mode_street for its upgrade mode (the other modes build new roads).
+local BASE_UPGRADE_MODE <const> = 3
+local BASE_BUS_LANE_ACTION <const> = "ACTION_BUS_LANE_TOOL"
+local BASE_TRAM_TRACK_ACTION <const> = "ACTION_TRAM_TRACK_TOOL"
+
+-- The tools of the base game that change a road: the street builder in upgrade mode, the bus lane tool, the tram track tool.
+local function isBaseRoadChangeTool(definition : ConstructionDefinition, params : {string : number}) : boolean
+	if definition == nil then return false end
+	if definition.action == BASE_UPGRADE_ACTION then return params ~= nil and params["mode_street"] == BASE_UPGRADE_MODE end
+	return definition.action == BASE_BUS_LANE_ACTION or definition.action == BASE_TRAM_TRACK_ACTION
+end
 
 local function installApiCapture()
 	if g_captureInstalled then return end
@@ -132,7 +142,14 @@ local function installApiCapture()
 			accessNotificationCacheFn : (function(Engine.Entity) : {Notification}), sublistParamsApi : ReactRefWrapApiT<any, ConstructionMenuParamsAPI>,
 			disableLayersIA : boolean) : ConstructionMenuActionParams
 		if sublistParamsApi ~= nil then g_paramsRef = sublistParamsApi end
-		return current(definition, params, repository, isGamepadMode, refParams, entity, accessNotificationCacheFn, sublistParamsApi, disableLayersIA)
+		local actionParams = current(definition, params, repository, isGamepadMode, refParams, entity, accessNotificationCacheFn, sublistParamsApi, disableLayersIA)
+		if probe.enabled() then
+			local okTool, isTool = pcall(isBaseRoadChangeTool, definition, params)
+			if okTool and isTool == true and actionParams ~= nil and actionParams.constructionActionParams ~= nil then
+				pcall(probe.install, actionParams.constructionActionParams, definition.action)
+			end
+		end
+		return actionParams
 	end
 end
 
@@ -176,12 +193,17 @@ local function logMsg(msg : string)
 	pcall(function() log.message(PREFIX .. msg) end)
 end
 
+-- A line about the upgrade of the selection: tagged with its category while the option "Debug: upgrade log" is On.
+local function upgradeMsg(category : string, msg : string)
+	logMsg(probe.tag(category, msg))
+end
+
 local function diagMsg(msg : string)
-	if probe.ENABLED then logMsg(msg) end
+	if probe.enabled() then logMsg(msg) end
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-11-01 bu"
+local BUILD <const> = "2026-11-02 cn"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -662,7 +684,7 @@ local function updatePreview(s : Selection)
 end
 
 local function logStroke(what : string, s : Selection)
-	logMsg(string.format("%s: %d selected, cost %s, %d samples, worst %.1f ms%s — %s",
+	upgradeMsg("upgrade", string.format("%s: %d selected, cost %s, %d samples, worst %.1f ms%s — %s",
 		what, sel.count(s.stroke), moneyText(previewCost(s)),
 		s.samples, s.worst * 1000, s.stroke.capped and ", capped" or "",
 		table.concat(sel.describe(s.stroke), " / ")))
@@ -720,11 +742,7 @@ end
 -- NO_TERRAIN_MAX_LINES lines per session).
 local NO_TERRAIN_AFTER <const> = 1.5
 local NO_TERRAIN_MAX_LINES <const> = 12
--- A click is logged as a stuck ring when the step did not update the ring for STUCK_RING_AFTER seconds, or when the ring
--- is more than STUCK_RING_OFFSET metres from the terrain position under the pointer. At most STUCK_RING_MAX_LINES
--- lines per session.
-local STUCK_RING_AFTER <const> = 1.0
-local STUCK_RING_OFFSET <const> = 20.0
+-- A click that layerOwner.ringStuck reports is logged as a stuck ring, at most STUCK_RING_MAX_LINES lines per session.
 local STUCK_RING_MAX_LINES <const> = 8
 local g_stuckRingLines = 0
 -- Mount and unmount of the world layer are logged with the os.clock time, at most LAYER_EVENT_MAX_LINES lines per session.
@@ -739,7 +757,7 @@ end
 local g_noTerrainSince : number = nil
 local g_noTerrainLines = 0
 
--- Cursor diagnostic (only with probe.ENABLED): after the tool is activated or its world layer is mounted again, the
+-- Cursor diagnostic (only with the option "Debug: upgrade log" On): after the tool is activated or its world layer is mounted again, the
 -- step logs the terrain position under the cursor and the ring position every DIAG_INTERVAL seconds, at most
 -- DIAG_EPISODE_LINES lines per session. The first step after the world layer is gone also logs once.
 
@@ -752,15 +770,24 @@ local g_noLayerLogged = false
 -- Number of tool instances created in this session.
 local g_instances = 0
 
--- The instance whose world layer is mounted (the one the game draws and sends the mouse events to), and the way to
--- give it the tool state of the newest instance (see the step). The state passed in stays for PUSH_GRACE_SECONDS.
-local PUSH_GRACE_SECONDS <const> = 0.5
-local g_layerOwnerId = 0
-local g_layerOwnerSetParam : function(ConstructionCustomActionParams<RubActionParam>) = nil
+-- The state of the world layer of every instance, and its owner (the instance the game draws and sends the mouse events to),
+-- are kept in brush_layer.tl. The newest instance gives the owner its tool state (see the step).
+-- true while the newest instance has passed its state and logged it; the line is written once per episode.
 local g_passLogged = false
 
+-- Lines about the life of the instances (created, mounted, unmounted, state passed), only with the option "Debug: upgrade
+-- log" On, at most LIFECYCLE_DIAG_MAX_LINES per session.
+local LIFECYCLE_DIAG_MAX_LINES <const> = 100
+local g_lifecycleLines = 0
+
+local function lifecycleMsg(msg : string)
+	if not probe.enabled() or g_lifecycleLines >= LIFECYCLE_DIAG_MAX_LINES then return end
+	g_lifecycleLines = g_lifecycleLines + 1
+	logMsg(msg)
+end
+
 local function armDiagnostic()
-	g_diagArmed = probe.ENABLED
+	g_diagArmed = probe.refresh()
 	g_diagLines = 0
 end
 
@@ -788,14 +815,12 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	local refRmbPress = react.useRef(nil) as ReactRefT<RmbPress>
 	local refMmbPress = react.useRef(nil) as ReactRefT<RmbPress>
 	local refRenderActive = react.useRef(false) as ReactRefT<boolean> -- isActive at the last render
-	local refLayerDownAt = react.useRef(nil) as ReactRefT<number>     -- os.clock() the world layer unmounted
-	local refLayerUp = react.useRef(false) as ReactRefT<boolean>      -- world layer mounted: this entry is the selected tool
 	local refCursorStepAt = react.useRef(nil) as ReactRefT<number>    -- os.clock() the step last updated the ring
 	local refInstance = react.useRef(0) as ReactRefT<integer>         -- number of this instance
 	if refInstance:get() == 0 then
 		g_instances = g_instances + 1
 		refInstance:set(g_instances)
-		diagMsg(string.format("instance #%d created", g_instances))
+		lifecycleMsg(string.format("instance #%d created", g_instances))
 	end
 
 	local refSkipRelease = react.useRef(false) as ReactRefT<boolean>
@@ -823,10 +848,9 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	local refUndergroundShown = react.useRef(false) as ReactRefT<boolean> -- the underground layer was added since the tool opened
 	-- The latest params for the step/event callbacks (they may outlive this render's closure).
 	local refParam = react.useRef(param) as ReactRefT<ConstructionCustomActionParams<RubActionParam>>
-	local refPushedAt = react.useRef(-PUSH_GRACE_SECONDS) as ReactRefT<number>   -- os.clock() a newer instance passed its state in
 	-- A render of an instance that the menu no longer updates carries old params; while a newer instance passes the
 	-- current ones in, they stay.
-	if os.clock() - refPushedAt:get() > PUSH_GRACE_SECONDS then refParam:set(param) end
+	if layerOwner.acceptsParam(refInstance:get(), os.clock()) then refParam:set(param) end
 	-- The game's shortcut for the underground view (G). The game registers it only for its own builder tools.
 	-- The view switches at once; the toolbar button follows when the menu's API is at hand.
 	local syncFilters : function(string)
@@ -856,7 +880,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 
 	-- One step along brush.RADII. Only the instance whose world layer is mounted acts; a held key repeats.
 	local function stepRadius(direction : integer)
-		if not refLayerUp:get() or not refParam:get().isActive then return end
+		if not layerOwner.isUp(refInstance:get()) or not refParam:get().isActive then return end
 		local current = brush.radiusIndex(radiusState:old()) or brush.radiusIndex(brush.DEFAULT_RADIUS)
 		local target = math.max(1, math.min(#brush.RADII, current + direction))
 		if target == current then return end
@@ -944,7 +968,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	-- Esc while roads are being upgraded stops the upgrade after the road in progress, as the Clear button does; the
 	-- tool stays open.
 	local function cancelUpgrade()
-		logMsg("upgrade cancelled (Esc)")
+		upgradeMsg("upgrade", "upgrade cancelled (Esc)")
 		commit.cancel()
 	end
 	local function closeTool()
@@ -970,7 +994,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		elseif s ~= nil and s.phase == PHASE_COMMITTING then
 			-- The commit is driven by the steps of this recipe. Cancelling lets it end after the road in progress and set the
 			-- game speed back.
-			logMsg("tool closed while upgrading (" .. why .. "); cancelling the upgrade after the road in progress")
+			upgradeMsg("upgrade", "tool closed while upgrading (" .. why .. "); cancelling the upgrade after the road in progress")
 			refJob:set(refJob:get() + 1)
 			pcall(commit.cancel)
 		end
@@ -992,12 +1016,13 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 
 	react.onMount(function()
 		resetStatus()
-		diagMsg(string.format("instance #%d mounted", refInstance:get()))
+		lifecycleMsg(string.format("instance #%d mounted", refInstance:get()))
 	end)
 	react.onUnmount(function()
 		resetStatus()
-		pcall(function() diagMsg(string.format("instance #%d unmounted", refInstance:get())) end)
+		pcall(function() lifecycleMsg(string.format("instance #%d unmounted", refInstance:get())) end)
 		pcall(resetAll, "tool closed", false)
+		pcall(function() layerOwner.forget(refInstance:get()) end)
 	end)
 	-- isActive dropped since the last render. onStep may not run any more when the menu is hidden.
 	if refRenderActive:get() and not param.isActive then
@@ -1066,7 +1091,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		end)
 		perf:stop("commit", tPerf)
 		if not ok then
-			logMsg("commit failed: " .. tostring(err))
+			upgradeMsg("failure", "commit failed: " .. tostring(err))
 			refResult:set({ text = { head = _("Upgrade failed"), detail = _("See the game log"), severity = "error" }, untilAt = os.clock() + RESULT_SECONDS })
 			refJob:set(job + 1)
 			resetToIdle()
@@ -1099,14 +1124,14 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	local function upgradeSelection()
 		local s = refSel:get()
 		if s == nil or s.phase == PHASE_IDLE or sel.count(s.stroke) == 0 then
-			logMsg("upgrade button: nothing selected")
+			upgradeMsg("upgrade", "upgrade button: nothing selected")
 			local first = brushOptions.mode(g_toolParams) == "rail" and _("Paint over tracks first") or _("Paint over roads first")
 			refResult:set({ text = { head = _("Nothing selected"), detail = first, severity = "warning" }, untilAt = os.clock() + RESULT_SECONDS })
 			bump()
 			return
 		end
 		if s.phase == PHASE_COMMITTING then
-			logMsg("upgrade button: a commit is already running")
+			upgradeMsg("upgrade", "upgrade button: a commit is already running")
 			return
 		end
 		-- PAINTING only if LMB still counts as held (it can't be while the toolbar is clicked):
@@ -1117,30 +1142,30 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		end
 		if brushOptions.mode(g_toolParams) == "rail" then
 			local targeter = brushOptions.railTargeter(g_toolParams)
-			logMsg("upgrade button: " .. tostring(sel.count(s.stroke)) .. " selected, " .. brushOptions.railKey(g_toolParams))
+			upgradeMsg("upgrade", "upgrade button: " .. tostring(sel.count(s.stroke)) .. " selected, " .. brushOptions.railKey(g_toolParams))
 			startCommit(s, nil, brushOptions.extras({}), false, targeter)
 			return
 		end
 		local template, problem = brushOptions.template(g_toolParams)
 		if template == nil then
-			logMsg("upgrade button: no street template (" .. tostring(problem) .. ")")
+			upgradeMsg("failure", "upgrade button: no street template (" .. tostring(problem) .. ")")
 			refResult:set({ text = { head = _("Cannot upgrade"), detail = problem, severity = "error" }, untilAt = os.clock() + RESULT_SECONDS })
 			bump()
 			return
 		end
-		logMsg("upgrade button: " .. tostring(sel.count(s.stroke)) .. " selected, template " .. template)
+		upgradeMsg("upgrade", "upgrade button: " .. tostring(sel.count(s.stroke)) .. " selected, template " .. template)
 		startCommit(s, template, brushOptions.extras(g_toolParams), brushOptions.removeBuildings(g_toolParams))
 	end
 
 	-- Enter does what the Upgrade button does, for a selection that waits. Only the instance whose world layer is mounted acts.
 	local function upgradeOnEnter(action : string)
-		if not refLayerUp:get() or not refParam:get().isActive then return end
+		if not layerOwner.isUp(refInstance:get()) or not refParam:get().isActive then return end
 		local s = refSel:get()
 		if s == nil or s.phase ~= PHASE_SELECTED then return end
 		local now = os.clock()
 		if now - g_lastEnterAt < ENTER_MIN_GAP then return end
 		g_lastEnterAt = now
-		logMsg("Enter (" .. action .. "): upgrade")
+		upgradeMsg("upgrade", "Enter (" .. action .. "): upgrade")
 		upgradeSelection()
 	end
 	react.useInputAction(IA_ENTER_NAV, react.iaHandler(function() upgradeOnEnter(IA_ENTER_NAV) end))
@@ -1164,7 +1189,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		local s = refSel:get()
 		if s ~= nil and s.phase == PHASE_COMMITTING then
 			-- the upgrade stops after the road in progress; its onDone then clears the selection
-			logMsg("clear button: cancelling the upgrade")
+			upgradeMsg("upgrade", "clear button: cancelling the upgrade")
 			commit.cancel()
 		elseif hasPending() then
 			cancelPending("clear button")
@@ -1257,25 +1282,24 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		-- The newest instance is the one the menu keeps up to date, but after other tools were used the menu may keep
 		-- drawing the world layer of an older instance. Then the newest instance passes its state to the instance
 		-- that owns the layer, which follows the pointer and handles the clicks; it does nothing else.
-		if not refLayerUp:get() and g_layerOwnerSetParam ~= nil and g_layerOwnerId ~= refInstance:get()
-				and refInstance:get() == g_instances then
-			g_layerOwnerSetParam(prm)
+		if layerOwner.passState(refInstance:get(), g_instances, os.clock(), prm) then
 			if not g_passLogged then
 				g_passLogged = true
-				diagMsg(string.format("instance #%d passes the tool state to instance #%d, which owns the world layer",
-					refInstance:get(), g_layerOwnerId))
+				lifecycleMsg(string.format("instance #%d passes the tool state to instance #%d, which owns the world layer",
+					refInstance:get(), layerOwner.owner()))
 			end
 			perf:stop("step", tStep)
 			return
 		end
-		g_passLogged = false
+		if refInstance:get() == g_instances then g_passLogged = false end
 		local active = prm.isActive == true
+		local activated = active and not refWasActive:get()
 		-- Activation edge: read back the toolbar (onChangeFn does not fire at mount).
 		if active ~= refWasActive:get() then
 			refWasActive:set(active)
 			if active then
 				-- Every use starts from default state; only the radius (g_radius, radiusState) carries over. The mounted
-				-- state of the world layer (refLayerUp, g_layerOwner*) describes the game, so it stays.
+				-- state of the world layer (layerOwner) describes the game, so it stays.
 				resetAll("tool activated", false)
 				cursorState:set(nil)
 				refShift:set(false)
@@ -1286,7 +1310,6 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 				refSame:set(nil)
 				refHoverSame:set(nil)
 				refCursorStepAt:set(nil)
-				refLayerDownAt:set(nil)
 				g_viewOverride = nil
 				g_lastShortcut = nil
 				g_noTerrainSince = nil
@@ -1306,23 +1329,21 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 				cursorState:set(nil)
 			end
 		end
+		-- World layer unmounted and not back (another tool took the world): the tool was switched.
+		local layerGone, layerUp = layerOwner.step(refInstance:get(), os.clock(), active, activated)
 		if not active then
-			refLayerDownAt:set(nil)
 			publishIfChanged()
 			perf:stop("step", tStep)
 			return
 		end
-		-- World layer unmounted and not back (another tool took the world): the tool was switched.
-		local downAt = refLayerDownAt:get()
-		if downAt ~= nil and os.clock() - downAt >= LAYER_GONE_SECONDS then
-			refLayerDownAt:set(nil)
+		if layerGone then
 			logMsg("world layer unmounted")
 			resetAll("tool switched", true)
 		end
 		-- isActive stays true for every entry of the shown tab in mouse mode (the menu mounts each entry's recipe).
 		-- Only the selected entry's world layer is mounted.
 
-		if not refLayerUp:get() then
+		if not layerUp then
 			if not g_noLayerLogged and g_diagLines < DIAG_EPISODE_LINES then
 				g_noLayerLogged = true
 				g_diagLines = g_diagLines + 1
@@ -1424,7 +1445,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		s = refSel:get()
 		-- A commit whose last callback never came: stop waiting on screen.
 		if s ~= nil and s.phase == PHASE_COMMITTING and now - (s.commitAt or now) > COMMIT_TIMEOUT then
-			logMsg(string.format("commit: no final callback after %d s, giving up waiting", math.floor(COMMIT_TIMEOUT)))
+			upgradeMsg("failure", string.format("commit: no final callback after %d s, giving up waiting", math.floor(COMMIT_TIMEOUT)))
 			refJob:set(refJob:get() + 1)
 			-- The new job number makes the commit's onDone a no-op; abort sets the game speed back and frees the commit.
 			pcall(commit.abort)
@@ -1535,28 +1556,22 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		if brushOptions.mode(g_toolParams) == "rail" then copyTrack() else copyRoad() end
 	end
 
-	-- This instance's world layer is mounted: the step follows the pointer and the instance owns the mouse events.
-	local function claimLayer()
-		refLayerUp:set(true)
-		refLayerDownAt:set(nil)
-		g_layerOwnerId = refInstance:get()
-		g_layerOwnerSetParam = function(p : ConstructionCustomActionParams<RubActionParam>)
-			refParam:set(p)
-			refPushedAt:set(os.clock())
-		end
+	-- The tool state that the newest instance passes to this instance, when this instance owns the layer.
+	local function takeParam(p : any)
+		refParam:set(p as ConstructionCustomActionParams<RubActionParam>)
 	end
 
 	local onMouse = function(e : Gui.Mouse.Event) : boolean
 		local tMouse = perf:start()
-		-- Only the Selector of a mounted layer receives mouse events, so an event marks the layer mounted. Events within
-		-- LAYER_GONE_SECONDS of an unmount are ignored.
-		local wasUp = refLayerUp:get()
-		if not wasUp then
-			local downAt = refLayerDownAt:get()
-			if downAt == nil or os.clock() - downAt >= LAYER_GONE_SECONDS then
-				claimLayer()
-				layerEventMsg(string.format("instance #%d: mouse event on a layer marked unmounted, marked mounted again", refInstance:get()))
-			end
+		-- Only the Selector of a mounted layer receives mouse events, so an event marks the layer mounted (see layerOwner.mouse).
+		local verdict, verdictText = layerOwner.mouse(refInstance:get(), os.clock(), takeParam)
+		local wasUp = verdict == "up"
+		if verdictText ~= nil then
+			if verdict == "blocked" then logMsg(string.format("layer event %.3f: %s", os.clock(), verdictText)) else layerEventMsg(verdictText) end
+		end
+		if verdict == "blocked" then
+			perf:stop("mouse", tMouse)
+			return false
 		end
 		local T = api.gui.mouse.Event.Type
 		local isLmb = e.button == 0
@@ -1566,16 +1581,14 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			local stepAt = refCursorStepAt:get()
 			local ring = cursorState:old()
 			local live = api.gui.mouse.hasTerrainPosition() and api.gui.mouse.getTerrainPosition() or nil
-			local stepStale = stepAt == nil or os.clock() - stepAt > STUCK_RING_AFTER
-			local ringOff = ring ~= nil and (live == nil or math.abs(live.x - ring.x) > STUCK_RING_OFFSET
-				or math.abs(live.y - ring.y) > STUCK_RING_OFFSET)
-			if stepStale or ringOff then
+			if layerOwner.ringStuck(stepAt, os.clock(), ring ~= nil and ring.x or nil, ring ~= nil and ring.y or nil,
+					live ~= nil and live.x or nil, live ~= nil and live.y or nil) then
 				g_stuckRingLines = g_stuckRingLines + 1
 				logMsg(string.format("stuck ring: click; last ring update %s s ago; ring %s, terrain position under the pointer %s; instance #%d of %d, layer owner #%d, layer was %s, isActive %s, wasActive %s, underground button %s",
 					stepAt ~= nil and string.format("%.1f", os.clock() - stepAt) or "never",
 					ring ~= nil and string.format("%.1f/%.1f", ring.x, ring.y) or "none",
 					live ~= nil and string.format("%.1f/%.1f", live.x, live.y) or "none",
-					refInstance:get(), g_instances, g_layerOwnerId, wasUp and "up" or "down",
+					refInstance:get(), g_instances, layerOwner.owner(), wasUp and "up" or "down",
 					tostring(refParam:get().isActive), tostring(refWasActive:get()), tostring(g_toolParams["undergroundMode"])))
 			end
 		end
@@ -1722,16 +1735,14 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			preferredLayer:set(ev ~= nil and ev.config or nil)
 		end)
 		-- World-layer lifecycle. The menu swaps the action to another entry's (or its "default") when the tool is
-		-- left, which unmounts this layer. An unmount not followed by a mount within LAYER_GONE_SECONDS clears the
+		-- left, which unmounts this layer. An unmount not followed by a mount within layerOwner.GONE_SECONDS clears the
 		-- selection (here or in onStep).
 		react.onMount(function()
 			pcall(function()
-				local downAt = refLayerDownAt:get()
-				local wasUp = refLayerUp:get()
-				claimLayer()
+				local wasUp, downFor, gone = layerOwner.mount(refInstance:get(), os.clock(), takeParam)
 				layerEventMsg(string.format("instance #%d: world layer mounted (flag was %s, unmounted %s s before)", refInstance:get(),
-					wasUp and "up" or "down", downAt ~= nil and string.format("%.2f", os.clock() - downAt) or "no"))
-				if downAt ~= nil and os.clock() - downAt >= LAYER_GONE_SECONDS then
+					wasUp and "up" or "down", downFor ~= nil and string.format("%.2f", downFor) or "no"))
+				if gone then
 					logMsg("world layer mounted again")
 					armDiagnostic()
 					resetAll("tool switched", true)
@@ -1740,12 +1751,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		end)
 		react.onUnmount(function()
 			pcall(function()
-				refLayerUp:set(false)
-				refLayerDownAt:set(os.clock())
-				if g_layerOwnerId == refInstance:get() then
-					g_layerOwnerId = 0
-					g_layerOwnerSetParam = nil
-				end
+				layerOwner.unmount(refInstance:get(), os.clock())
 				layerEventMsg(string.format("instance #%d: world layer unmounted", refInstance:get()))
 			end)
 		end)

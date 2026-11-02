@@ -22,8 +22,6 @@ local COMMAND_GAP <const> = 0.1
 
 local RETRY_PASSES <const> = 2
 
-local segmentLogged = false
-
 local pendingStep : function() = nil
 local pendingDueAt : number = 0
 
@@ -372,10 +370,6 @@ local function proposalOf(edge : integer, template : string, decorations : {{int
 			summary = summary .. ", " .. note
 			if not okE then unsafe = true end
 		end
-		if probe.ENABLED and not segmentLogged and #p.proposal.addedSegments > 0 then
-			segmentLogged = true
-			summary = summary .. ", segment to send: " .. probe.segmentText(p.proposal.addedSegments[1])
-		end
 		return nil
 	end)
 	if not okS then
@@ -531,8 +525,8 @@ local function simulationText() : string
 	return "simulation unknown"
 end
 
--- The game MUST be paused while the commands run: the simulation moves vehicles on the roads that a command
--- replaces, and the game can crash. The commit pauses the game (speed 0) and sets the old speed back when it is done.
+-- The game MUST be paused while the commands run. The commit pauses the game (speed 0) and sets the old speed back when it
+-- is done.
 local PAUSE_NOTE <const> = "Pause the game first"
 
 -- Speed the game ran at before this module paused it; nil when it did not pause the game.
@@ -609,12 +603,25 @@ local function reasonsText(r : {string : integer}) : string
 	return table.concat(parts, ", ")
 end
 
+-- The proposal of one road and the context of its command. `p` is nil when the road fails: `why` or `errText` tell why.
+local record Prepared
+	p : Proposal
+	summary : string
+	why : string
+	context : Context
+	force : boolean
+	errText : string
+end
+
 function upgrade.commit(edges : {integer}, template : string, extras : RubExtras, removeBuildings : boolean, ctx : RubContext,
 		industryRoads : {integer : boolean}, onDone : function(RubCommitResult), logFn : function(string),
 		onRoad : function(integer, boolean, integer, integer, integer), railTarget? : RubRailTarget)
 	local t0 = os.clock()
 	extras = extras or { busLane = false, tram = false, catenary = false, lock = "keep" }
-	local logLine = logFn or function(_s : string) end
+	local plainLog = logFn or function(_s : string) end
+	local function logLine(text : string, category? : string)
+		plainLog(probe.tag(category or "upgrade", text))
+	end
 	edges = edges or {}
 	local res : RubCommitResult = {
 		requested = #edges, removed = 0, unchanged = 0, failed = {}, skipped = 0, reasons = {}, commands = 0,
@@ -622,17 +629,17 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	}
 	if running ~= nil then
 		-- The roads stay selected: a refusal reports them as failed.
-		logLine("upgrade refused: the previous upgrade is still running")
+		logLine("upgrade refused: the previous upgrade is still running", "failure")
 		res.refused = STILL_RUNNING
 		res.skipped = res.requested
 		for i, e in ipairs(edges) do res.failed[i] = e end
 		if onDone ~= nil then
 			local okD, errD = pcall(function() : string onDone(res); return nil end)
-			if not okD then logLine("upgrade onDone failed: " .. tostring(errD)) end
+			if not okD then logLine("upgrade onDone failed: " .. tostring(errD), "failure") end
 		end
 		return
 	end
-	segmentLogged = false
+	probe.beginPress()
 	pendingStep = nil
 	local finished = false
 	local cancelled = false
@@ -648,7 +655,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		if e ~= nil then passFinished = passFinished + 1 end
 		if onRoad ~= nil then
 			local okC, err = pcall(function() : string onRoad(e, ok, passFinished, passTotal, passAttempt); return nil end)
-			if not okC then logLine("progress callback failed: " .. tostring(err)) end
+			if not okC then logLine("progress callback failed: " .. tostring(err), "failure") end
 		end
 	end
 	local function startPass(attempt : integer, total : integer)
@@ -682,7 +689,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			res.refused ~= nil and (", refused: " .. res.refused) or ""))
 		if onDone ~= nil then
 			local ok, err = pcall(function() : string onDone(res); return nil end)
-			if not ok then logLine("upgrade onDone failed: " .. tostring(err)) end
+			if not ok then logLine("upgrade onDone failed: " .. tostring(err), "failure") end
 		end
 	end
 	mine.cancel = function()
@@ -735,6 +742,9 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		#queue, railTarget ~= nil and "tracks" or "roads", template or "per track", extrasText(extras), #decorations,
 		tostring(removeBuildings), simulationText()))
 
+	-- `probe.press` MUST NOT run in a command callback. It reads every road of the press here, before the first command.
+	local press = probe.press(queue)
+
 	local failed : {integer} = {}
 	local failedReason : {integer : string} = {}
 	local function fail(e : integer, reason : string)
@@ -751,6 +761,76 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	-- The first retry puts them in the removal list of the proposal; the second retry also sends it with ignoreErrors.
 	-- Both need the option "Remove buildings in the way".
 	local assetBlockers : {integer : {integer}} = {}
+
+	-- Builds the proposal of one road and the context of its command. The game calls this from its own thread: an error in
+	-- the preparation fails the road, not the whole run.
+	local function prepareCommand(e : integer, attempt : integer, target : string, wanted : {{integer, boolean}}, setWanted : boolean) : Prepared
+		local prepared : Prepared = { force = false }
+		local okP, errP = pcall(function() : string
+			prepared.p, prepared.summary, prepared.why = proposalOf(e, target, wanted, extras, setWanted)
+			if prepared.p == nil then return nil end
+			prepared.context = makeContext(removeBuildings)
+			local blockers = removeBuildings and attempt > 0 and assetBlockers[e] or nil
+			if blockers ~= nil then
+				-- An earlier road of this press may have removed a shared asset group; the game refuses a removal list
+				-- with an entity that is gone ("Unknown exception" in PreprocessProposal).
+				local remaining : {integer} = {}
+				for _, a in ipairs(blockers) do
+					if api.engine.entityExists(a) then remaining[#remaining + 1] = a end
+				end
+				blockers = #remaining > 0 and remaining or nil
+			end
+			prepared.force = blockers ~= nil and attempt >= RETRY_PASSES
+			if blockers ~= nil then
+				addToRemove(prepared.p, blockers)
+				prepared.summary = prepared.summary .. string.format("; %d asset groups in the way put in toRemove%s", #blockers,
+					prepared.force and ", sent with ignoreErrors" or "")
+			end
+			return nil
+		end)
+		if not okP then
+			prepared.p = nil
+			prepared.errText = tostring(errP)
+		end
+		return prepared
+	end
+
+	-- The answer of the game to the command of one road. `done` runs after the command gap.
+	local function onCommandResult(e : integer, attempt : integer, summary : string, data : WorldBuildProposalCommandData,
+			success : boolean, done : function())
+		res.commands = res.commands + 1
+		local msgs = messagesOf(data)
+		local cost = costOf(data)
+		local outcome = "ok"
+		if success == true then
+			res.removed = res.removed + 1
+			report(e, true)
+			if cost ~= nil then res.cost = (res.cost or 0) + cost end
+			if attempt > 0 then recovered = recovered + 1 end
+		else
+			fail(e, msgs[1] or REFUSED_BY_GAME)
+			outcome = "FAILED"
+			local assets, onlyAssets = assetGroupsOf(data, e)
+			assetBlockers[e] = (onlyAssets and #msgs == 1) and assets or nil
+		end
+		logLine(string.format("cmd %d%s: edge %d -> %s%s; %s; %s; %s", res.commands, attempt > 0 and string.format(" (retry %d)", attempt) or "", e,
+			outcome, #msgs > 0 and (": " .. table.concat(msgs, "; ")) or "", simulationText(), summary,
+			success == true and string.format("cost %s, %d buildings gathered", tostring(cost), buildingCount(data))
+				or ("collides with: " .. collisionText(data, e) .. "; road: " .. describeRoad(e))),
+			success == true and "upgrade" or "failure")
+		if cancelled then
+			finish()
+			return
+		end
+		afterGap(function()
+			press.after(e, simulationText)
+			local okC, errC = pcall(function() : string done(); return nil end)
+			if not okC then
+				logLine("upgrade callback failed: " .. tostring(errC), "failure")
+				finish()
+			end
+		end)
+	end
 
 	-- One road: nothing for a road that already is the target; else its command, sent while the game is paused.
 	-- `done` runs when the road is finished, from the command callback when a command was sent.
@@ -789,6 +869,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			done()
 			return
 		end
+		press.road(e, attempt)
 		busy = true
 		ensurePaused(logLine, function(paused : boolean)
 			busy = false
@@ -803,91 +884,36 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 				done()
 				return
 			end
-			local p : Proposal = nil
-			local summary : string = nil
-			local why : string = nil
-			local context : Context = nil
-			local force = false
-			-- The game calls this from its own thread: an error in the preparation fails the road, not the whole run.
-			local okP, errP = pcall(function() : string
-				p, summary, why = proposalOf(e, target, wanted, extras, setWanted)
-				if p == nil then return nil end
-				context = makeContext(removeBuildings)
-				local blockers = removeBuildings and attempt > 0 and assetBlockers[e] or nil
-				if blockers ~= nil then
-					-- An earlier road of this press may have removed a shared asset group; the game refuses a removal list
-					-- with an entity that is gone ("Unknown exception" in PreprocessProposal).
-					local remaining : {integer} = {}
-					for _, a in ipairs(blockers) do
-						if api.engine.entityExists(a) then remaining[#remaining + 1] = a end
-					end
-					blockers = #remaining > 0 and remaining or nil
-				end
-				force = blockers ~= nil and attempt >= RETRY_PASSES
-				if blockers ~= nil then
-					addToRemove(p, blockers)
-					summary = summary .. string.format("; %d asset groups in the way put in toRemove%s", #blockers,
-						force and ", sent with ignoreErrors" or "")
-				end
-				return nil
-			end)
-			if not okP then
-				logLine(string.format("edge %d: preparing the command failed: %s", e, tostring(errP)))
+			local prepared = prepareCommand(e, attempt, target, wanted, setWanted)
+			press.proposal(e, prepared.p, res.commands)
+			if prepared.errText ~= nil then
+				logLine(string.format("edge %d: preparing the command failed: %s", e, prepared.errText), "failure")
 				fail(e, "script error")
 				done()
 				return
 			end
-			if p == nil then
-				fail(e, why or REFUSED_BY_GAME)
-				logLine(string.format("edge %d: %s", e, summary))
+			if prepared.p == nil then
+				fail(e, prepared.why or REFUSED_BY_GAME)
+				logLine(string.format("edge %d: %s", e, prepared.summary), "failure")
 				done()
 				return
 			end
 			local called = false
 			busy = true
 			local okS, errS = pcall(function() : string
-				local cmd = api.cmd.makeWorldBuildProposalCmd(p, context, force, true, true)
+				local cmd = api.cmd.makeWorldBuildProposalCmd(prepared.p, prepared.context, prepared.force, true, true)
 				api.cmd.sendCommand(cmd, function(data : WorldBuildProposalCommandData, success : boolean)
 					if called or finished then return end
 					called = true
 					busy = false
-					res.commands = res.commands + 1
-					local msgs = messagesOf(data)
-					local cost = costOf(data)
-					local outcome = "ok"
-					if success == true then
-						res.removed = res.removed + 1
-						report(e, true)
-						if cost ~= nil then res.cost = (res.cost or 0) + cost end
-						if attempt > 0 then recovered = recovered + 1 end
-					else
-						fail(e, msgs[1] or REFUSED_BY_GAME)
-						outcome = "FAILED"
-						local assets, onlyAssets = assetGroupsOf(data, e)
-						assetBlockers[e] = (onlyAssets and #msgs == 1) and assets or nil
-					end
-					logLine(string.format("cmd %d%s: edge %d -> %s%s; %s; %s; %s", res.commands, attempt > 0 and string.format(" (retry %d)", attempt) or "", e,
-						outcome, #msgs > 0 and (": " .. table.concat(msgs, "; ")) or "", simulationText(), summary,
-						success == true and string.format("cost %s, %d buildings gathered", tostring(cost), buildingCount(data))
-							or ("collides with: " .. collisionText(data, e) .. "; road: " .. describeRoad(e))))
-					if cancelled then
-						finish()
-						return
-					end
-					afterGap(function()
-						local okC, errC = pcall(function() : string done(); return nil end)
-						if not okC then
-							logLine("upgrade callback failed: " .. tostring(errC))
-							finish()
-						end
-					end)
+					onCommandResult(e, attempt, prepared.summary, data, success, done)
 				end)
 				return nil
 			end)
 			if not okS and not called then
 				called = true
 				busy = false
-				logLine("send failed: " .. tostring(errS))
+				logLine("send failed: " .. tostring(errS), "failure")
 				fail(e, "script error")
 				done()
 			end
