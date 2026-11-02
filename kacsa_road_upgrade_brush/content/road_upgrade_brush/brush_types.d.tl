@@ -157,3 +157,38 @@ global record RubProposalProbe
 	--- Reads every road of `edges` now (option On only) and returns the handle of the press. It MUST NOT run in a command callback. Every call of the handle is protected: an error in it never reaches the caller.
 	press : function(edges : {integer}) : RubProbePress
 end
+
+--- Options of `RubGridBuilderModule.build`. A field that is missing keeps its default.
+global record RubGridOptions
+	--- Blocks along the heading of the strip (6).
+	blocksAlong : integer
+	--- Blocks to the left of the heading (8).
+	blocksLeft : integer
+	--- Length of a block along the heading, in metres (144).
+	blockLengthAlongM : number
+	--- Length of a block to the left, in metres (88).
+	blockLengthLeftM : number
+	--- true starts the grid at the first node of the strip and runs it the other way (false).
+	flipStripDirection : boolean
+	--- Radius around the camera centre in which the strip is searched, in metres (150).
+	cameraSearchRadiusM : number
+	--- Radius in which a grid point joins an existing node, in metres (3).
+	nodeSnapRadiusM : number
+	--- Every Nth street that runs along the heading is large, 0 for none (4).
+	largeEveryAlong : integer
+	--- Every Nth street that runs to the left is large, 0 for none (3).
+	largeEveryLeft : integer
+	--- Short template names of the large street. The first one available in the game year is used ({"town_new_large", "town_old_large"}).
+	largeStreetBaseNames : {string}
+	--- Street segments in one command, 0 for all of them in one command (1). A node that segments of one command share is made once, with all its edges.
+	edgesPerCommand : integer
+	--- true adds an empty node config (default lane connections, no crosswalks) for every new node of a command. The default is true when a large street is in the grid, else false. Streets with several lanes per direction need it.
+	explicitNodeConfigs : boolean
+	--- What to do at the grid corners that keep only two streets, which have no lane connections after an empty node config: "remove" builds a short plain street out of the corner and removes it again, "keep" builds it and leaves it, "off" does nothing. The default is "remove" when explicitNodeConfigs is true, else "off".
+	bendStubs : string
+end
+-- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_grid_builder.tl" as RubGridBuilderModule
+global record RubGridBuilderModule
+	--- Builds the grid from the street nearest to the camera, one command per segment. Raises an error when no street is near or no large template exists for the year.
+	build : function(options : RubGridOptions)
+end
