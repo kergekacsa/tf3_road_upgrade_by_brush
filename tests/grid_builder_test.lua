@@ -624,4 +624,205 @@ support.check("options: the snap radius reaches the octree", small.octreeCalls[2
 local offMap = runWorld(vec(4900, 0, 0), vec(4980, 0, 0))
 support.check("a grid that leaves the map sends nothing", offMap.ok and offMap.commands == 0 and offMap.out[1]:find("fits_map false", 1, true) ~= nil)
 
+-- Traffic lights: a world of junctions, each with a reason to be skipped except nodes 1 and 7.
+local OTHER_PLAYER = 99
+local CUSTOM_LIGHT_CONFIG = { custom = true }
+local function runLights(entry, failCommand)
+  local major, minor = { laneConfigs = laneLayout("major", 2) }, { laneConfigs = laneLayout("minor", 1) }
+  local edges = { [101] = major, [102] = major, [103] = minor, [104] = minor, [105] = minor, [106] = major }
+  local streetsOf = { [1] = { 101, 102, 103 }, [2] = { 101, 102, 103, 104 }, [3] = { 103, 104, 105 }, [4] = { 106, 102, 103 },
+    [5] = { 101, 102, 103 }, [6] = { 101, 103 }, [7] = { 101, 102, 103 } }
+  local lightNodes = { [1] = true, [2] = true, [3] = true, [4] = true, [6] = true, [7] = true }
+  local configs = { [2] = { trafficLightPreference = "NO" }, [7] = { trafficLightPreference = "AUTO", trafficLightConfig = CUSTOM_LIGHT_CONFIG } }
+  local queue, sent, out = {}, {}, {}
+  _G.api = {
+    type = {
+      ComponentType = { BASE_EDGE = "BASE_EDGE", PLAYER_OWNED = "PLAYER_OWNED", BASE_NODE_CONFIG = "BASE_NODE_CONFIG", BASE_NODE_TRAFFIC_LIGHT = "BASE_NODE_TRAFFIC_LIGHT" },
+      enum = { TransportMode = { PERSON = 0 }, TrafficLightPreference = { NO = "NO", AUTO = "AUTO" } },
+      TrafficLightConfig = { new = function() return { fresh = true } end },
+    },
+    engine = {
+      util = { getPlayer = function() return 42 end,
+        proposal = { createTrafficLightProposal = function(node, config, preference) return { node = node, config = config, preference = preference } end } },
+      system = { streetSystem = { getNode2StreetEdgeMap = function() return streetsOf end } },
+      getComponent = function(entity, component)
+        if component == "BASE_EDGE" then return edges[entity] end
+        if component == "PLAYER_OWNED" then return { player = entity == 106 and OTHER_PLAYER or 42 } end
+        if component == "BASE_NODE_CONFIG" then return configs[entity] end
+        if component == "BASE_NODE_TRAFFIC_LIGHT" then return lightNodes[entity] and {} or nil end
+      end,
+    },
+    cmd = {
+      makeWorldBuildProposalCmd = function(proposal, context, ignoreErrors, playerInitiated) return { proposal = proposal, context = context, ignoreErrors = ignoreErrors, playerInitiated = playerInitiated } end,
+      sendCommand = function(cmd, callback) queue[#queue + 1] = { cmd = cmd, callback = callback } end,
+    },
+  }
+  local realPrint = print
+  _G.print = function(...) out[#out + 1] = table.concat({ ... }, " ") end
+  local ok, err = pcall(entry)
+  local sequential = true
+  while ok and #queue > 0 do
+    sequential = sequential and #queue == 1
+    local item = table.remove(queue, 1)
+    sent[#sent + 1] = item.cmd
+    if #sent == failCommand then
+      item.callback({ resultProposalData = { errorState = { messages = { "Collision" } } } }, false)
+    else
+      item.callback({}, true)
+    end
+  end
+  _G.print = realPrint
+  return { ok = ok, err = err, sent = sent, out = out, sequential = sequential }
+end
+
+local lights = runLights(gridBuilder.removeLights)
+support.check("remove lights: one command per qualifying node, each sent after the previous one finished", lights.ok and #lights.sent == 2 and lights.sequential, lights.err or #lights.sent)
+support.check("remove lights: the proposal sets the preference NO on the node, without context and not player initiated",
+  lights.sent[1].proposal.node == 1 and lights.sent[2].proposal.node == 7 and lights.sent[1].proposal.preference == "NO" and lights.sent[2].proposal.preference == "NO"
+  and lights.sent[1].context == nil and lights.sent[1].playerInitiated == false and lights.sent[1].ignoreErrors == false)
+support.check("remove lights: a node without a config gets a new light config, a node with one keeps its own",
+  lights.sent[1].proposal.config.fresh == true and lights.sent[2].proposal.config == CUSTOM_LIGHT_CONFIG)
+support.check("remove lights: the run ends with the counts", lights.out[#lights.out]:find("lights_done nodes 2 changed 2 skipped 0 failed 0", 1, true) ~= nil, lights.out[#lights.out])
+local lightsFail = runLights(gridBuilder.removeLights, 2)
+support.check("remove lights: a refused command is logged with the game message and the run goes on",
+  lightsFail.ok and lightsFail.out[1]:find("lights_failed 7 Collision", 1, true) ~= nil and lightsFail.out[#lightsFail.out]:find("lights_done nodes 2 changed 1 skipped 0 failed 1", 1, true) ~= nil,
+  table.concat(lightsFail.out, " | "))
+
+-- Left turns. Node 1 is a T junction whose two major streets form an L: S1 leaves to the west, S2 arrives from the north, the minor S3 leaves to the east.
+-- Major street lanes in build order: pedestrian, outer bus (back), inner normal (back), inner normal (forward), outer bus (forward), pedestrian.
+-- Seen from a node the positions of a major street are: incoming bus 1, incoming normal 2, outgoing normal 3, outgoing bus 4. The minor street has incoming normal 1 and outgoing normal 2.
+local function lane(forward, ...)
+  local modes = {}
+  for _, mode in ipairs({ ... }) do modes[mode] = true end
+  return { forward = forward, transportModes = modes }
+end
+local PERSON, CAR, BUS = 0, 2, 3
+local function majorLanes() return { lane(false, PERSON), lane(false, BUS), lane(false, CAR, BUS), lane(true, CAR, BUS), lane(true, BUS), lane(true, PERSON) } end
+local function minorLanes() return { lane(false, PERSON), lane(false, CAR, BUS), lane(true, CAR, BUS), lane(true, PERSON) } end
+local function connection(s0, l0, s1, l1, withRoad)
+  return { segment0 = s0, lane0 = l0, segment1 = s1, lane1 = l1, withRoad = withRoad ~= false, withTram = false }
+end
+
+-- Every incoming vehicle lane of a street to every outgoing vehicle lane of every other street, and one U-turn on the minor street.
+local function defaultConnections(s1, s2, s3)
+  local incoming = { [s1] = { 1, 2 }, [s2] = { 1, 2 }, [s3] = { 1 } }
+  local outgoing = { [s1] = { 3, 4 }, [s2] = { 3, 4 }, [s3] = { 2 } }
+  local list = {}
+  for _, from in ipairs({ s1, s2, s3 }) do
+    for _, to in ipairs({ s1, s2, s3 }) do
+      if from ~= to then
+        for _, l0 in ipairs(incoming[from]) do
+          for _, l1 in ipairs(outgoing[to]) do list[#list + 1] = connection(from, l0, to, l1) end
+        end
+      end
+    end
+  end
+  list[#list + 1] = connection(s3, 1, s3, 2)
+  list[#list + 1] = connection(s1, 0, s2, 0, false)
+  return list
+end
+
+local function runTurns(failCommand, entryPoint)
+  local edges, streetsOf, configs, lights = {}, {}, {}, {}
+  -- Junction n has the streets 10n+1 (west, starts at n), 10n+2 (from the north, ends at n), 10n+3 (east, starts at n).
+  for node = 1, 4 do
+    local s1, s2, s3 = node * 10 + 1, node * 10 + 2, node * 10 + 3
+    edges[s1] = { node0 = node, node1 = 900 + node, tangent0 = vec(-1, 0, 0), tangent1 = vec(-1, 0, 0), laneConfigs = majorLanes() }
+    edges[s2] = { node0 = 800 + node, node1 = node, tangent0 = vec(0, -1, 0), tangent1 = vec(0, -1, 0), laneConfigs = majorLanes() }
+    edges[s3] = { node0 = node, node1 = 700 + node, tangent0 = vec(1, 0, 0), tangent1 = vec(1, 0, 0), laneConfigs = minorLanes() }
+    streetsOf[node] = { s1, s2, s3 }
+  end
+  local function setConfig(node, connections) configs[node] = connections end
+  setConfig(1, defaultConnections(11, 12, 13))
+  setConfig(2, defaultConnections(21, 22, 23))
+  lights[2] = true
+  setConfig(3, { connection(31, 1, 32, 3), connection(31, 0, 32, 3) })
+  setConfig(4, { connection(41, 1, 42, 4), connection(41, 2, 42, 3), connection(43, 1, 43, 2) })
+  local queue, sent, out = {}, {}, {}
+  _G.api = {
+    type = {
+      ComponentType = { BASE_EDGE = "BASE_EDGE", PLAYER_OWNED = "PLAYER_OWNED", BASE_NODE_CONFIG = "BASE_NODE_CONFIG", BASE_NODE_TRAFFIC_LIGHT = "BASE_NODE_TRAFFIC_LIGHT" },
+      enum = { TransportMode = { PERSON = PERSON, CAR = CAR, BUS = BUS }, TrafficLightPreference = { NO = "NO" } },
+      TrafficLightConfig = { new = function() return { fresh = true } end },
+      BaseNodeLaneConnectionAndEntity = { new = function() return { comp = {} } end },
+      SimpleProposal = { new = function() return { streetProposal = {} } end },
+      Context = { new = function() return {} end },
+    },
+    engine = {
+      util = { getPlayer = function() return 42 end,
+        proposal = { createTrafficLightProposal = function(node, config, preference) return { node = node, config = config, preference = preference } end } },
+      system = { streetSystem = { getNode2StreetEdgeMap = function() return streetsOf end, getNodeStreetSegments = function(node) return streetsOf[node] end } },
+      getComponent = function(entity, component)
+        if component == "BASE_EDGE" then return edges[entity] end
+        if component == "PLAYER_OWNED" then return { player = 42 } end
+        if component == "BASE_NODE_TRAFFIC_LIGHT" then return lights[entity] and {} or nil end
+        if component == "BASE_NODE_CONFIG" then
+          local copy = {}
+          for index, item in ipairs(configs[entity]) do copy[index] = item end
+          return { laneConnections = copy, crosswalks = { 501 } }
+        end
+      end,
+    },
+    cmd = {
+      makeWorldBuildProposalCmd = function(proposal, context, ignoreErrors, playerInitiated) return { proposal = proposal, context = context, ignoreErrors = ignoreErrors, playerInitiated = playerInitiated } end,
+      sendCommand = function(cmd, callback) queue[#queue + 1] = { cmd = cmd, callback = callback } end,
+    },
+  }
+  local realPrint = print
+  _G.print = function(...) out[#out + 1] = table.concat({ ... }, " ") end
+  local ok, err = pcall(entryPoint or gridBuilder.removeLeftTurns)
+  local sequential = true
+  while ok and #queue > 0 do
+    sequential = sequential and #queue == 1
+    local item = table.remove(queue, 1)
+    sent[#sent + 1] = item.cmd
+    if item.cmd.proposal.preference ~= nil then lights[item.cmd.proposal.node] = nil end
+    if #sent == failCommand then
+      item.callback({ resultProposalData = { errorState = { messages = { "Collision" } } } }, false)
+    else
+      item.callback({}, true)
+    end
+  end
+  _G.print = realPrint
+  return { ok = ok, err = err, sent = sent, out = out, sequential = sequential }
+end
+
+local turns = runTurns()
+support.check("left turns: only node 1 gets a command, the others are skipped with a reason",
+  turns.ok and #turns.sent == 1 and turns.sequential and turns.sent[1].proposal.streetProposal.nodeConfigsToRemove[1] == 1
+  and table.concat(turns.out, "\n"):find("turns_skipped 2 has_traffic_light", 1, true) ~= nil
+  and table.concat(turns.out, "\n"):find("turns_skipped 3 lane_mismatch", 1, true) ~= nil
+  and table.concat(turns.out, "\n"):find("turns_skipped 4 unchanged", 1, true) ~= nil, turns.err or table.concat(turns.out, " | "))
+local function keptList(command)
+  local entry = command.proposal.streetProposal.nodeConfigsToAdd[1]
+  local list = {}
+  for _, c in ipairs(entry.comp.laneConnections) do list[#list + 1] = string.format("%d:%d>%d:%d", c.segment0, c.lane0, c.segment1, c.lane1) end
+  table.sort(list)
+  return table.concat(list, " "), entry
+end
+local keptText, keptEntry = keptList(turns.sent[1])
+-- S1>S2 and S2>S1 are the two major streets of the L: straight, bus to bus and normal to normal. S1>S3 and S3>S1 are straight by angle. S3>S2 is a right turn from the outer normal lane. S2>S3 is a left turn. The U-turn stays. The road-less connection stays.
+local expectedKept = { "11:0>12:0", "11:1>12:4", "11:2>12:3", "12:1>11:4", "12:2>11:3", "13:1>11:3", "13:1>12:3", "13:1>13:2", "11:2>13:2" }
+table.sort(expectedKept)
+support.check("left turns: the kept connections are the straight ones of the L, the straight ones by angle, the outer right turn, the U-turn and the connection without road",
+  keptText == table.concat(expectedKept, " "), keptText)
+support.check("left turns: the new config keeps the crosswalks and writes no flag, and the command is player initiated with the player in its context",
+  keptEntry.entity == 1 and #keptEntry.comp.crosswalks == 1 and keptEntry.comp.userModifiedLaneConnections == nil
+  and turns.sent[1].playerInitiated == true and turns.sent[1].ignoreErrors == false and turns.sent[1].context.player == 42)
+support.check("left turns: the log names the kept count and the run ends with the counts",
+  table.concat(turns.out, "\n"):find("turns_node 1 kept 9 of 18", 1, true) ~= nil and turns.out[#turns.out]:find("turns_done nodes 4 changed 1 skipped 3 failed 0", 1, true) ~= nil, table.concat(turns.out, " | "))
+-- Node 2 has the only light. The combined call removes it first, so the left turns of node 2 are removed in the same run, one command after the other.
+local both = runTurns(nil, gridBuilder.removeLightsAndLeftTurns)
+local bothText = table.concat(both.out, "\n")
+support.check("lights and left turns: the light of node 2 goes first, then nodes 1 and 2 lose their left turns, each command after the previous one",
+  both.ok and #both.sent == 3 and both.sequential and both.sent[1].proposal.preference == "NO" and both.sent[1].proposal.node == 2
+  and both.sent[2].proposal.streetProposal.nodeConfigsToRemove[1] == 1 and both.sent[3].proposal.streetProposal.nodeConfigsToRemove[1] == 2, both.err or #both.sent)
+support.check("lights and left turns: lights_done comes before the first turns line, and the run ends with turns_done",
+  bothText:find("lights_done nodes 1 changed 1 skipped 0 failed 0", 1, true) ~= nil
+  and bothText:find("lights_done", 1, true) < bothText:find("turns_node", 1, true)
+  and both.out[#both.out]:find("turns_done nodes 4 changed 2 skipped 2 failed 0", 1, true) ~= nil, bothText)
+local turnsFail = runTurns(1)
+support.check("left turns: a refused command is logged and counted", turnsFail.ok and turnsFail.out[#turnsFail.out]:find("turns_done nodes 4 changed 0 skipped 3 failed 1", 1, true) ~= nil
+  and table.concat(turnsFail.out, "\n"):find("turns_failed 1 Collision", 1, true) ~= nil, table.concat(turnsFail.out, " | "))
+
 support.finish("grid_builder_test")

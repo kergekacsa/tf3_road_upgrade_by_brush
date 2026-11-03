@@ -197,4 +197,10 @@ end
 global record RubGridBuilderModule
 	--- Builds the grid from the street nearest to the camera, one command per segment. Raises an error when no street is near or no large template exists for the year.
 	build : function(options : RubGridOptions)
+	--- Sets the traffic light preference "no" on every node of the player where a street with several lanes per direction meets a street with one lane, one command per node. Logs the counts of removed and failed nodes at the end.
+	removeLights : function()
+	--- Rewrites the lane connections of every major-minor junction of the player that has no traffic light: no left turns, straight only between lanes of one kind (bus or normal), right turns only from the outer lane to the outer lane of one kind. U-turns stay. Logs the counts of changed, skipped and failed nodes at the end.
+	removeLeftTurns : function()
+	--- Runs removeLights, then removeLeftTurns after the last light command finished.
+	removeLightsAndLeftTurns : function()
 end

@@ -17,7 +17,7 @@ All paths are under `kacsa_road_upgrade_brush\content\`.
 | `road_upgrade_brush/brush_rails.tl` | The six base track templates: name, parse, availability, and the per-track target of an upgrade. |
 | `road_upgrade_brush/rub_config`, `rub_options`, `rub_rules`, `rub_templates`, `rub_types.d.tl` | Road types, options, rules, and templates from Road Upgrade All in One. |
 | `road_upgrade_brush/proposal_probe.tl` | Diagnostics. The mod option "Debug: upgrade log" (`rub_log` in `mod.json`, Off by default) switches all of them on. See "Diagnostic log". |
-| `road_upgrade_brush/rub_grid_builder.tl` | The author's grid builder for the debug console. The console loads it with `ug_require`, and nothing in the mod loads it. It MUST NOT create a global variable (the game logs an error for each), and it MUST NOT appear in the README, the mod description, or a changelog. See `DEVELOPMENT-TOOLS.md`. |
+| `road_upgrade_brush/rub_grid_builder.tl` | The author's grid builder and traffic light tools for the debug console. The console loads it with `ug_require`, and nothing in the mod loads it. It MUST NOT create a global variable (the game logs an error for each), and it MUST NOT appear in the README, the mod description, or a changelog. See `DEVELOPMENT-TOOLS.md`. |
 | `sqperf/kacsa_road_upgrade_brush.lua`, `..._types.d.tl` | Performance log. `mod.json` has its parameter `sqperf_log`. It is independent of `rub_log`. |
 | `gui/road_upgrade_brush/` | The tool icons and their previews. |
 
@@ -66,6 +66,10 @@ All paths are under `kacsa_road_upgrade_brush\content\`.
 - A component that `api.engine.getComponent` returns, and a template that a repository returns, are views of engine data. After other commands ran, a view can read empty: a street template name read as `''` crashed the game with `ResTypeRep<StreetTemplate>::FindExisting: Resource not found` in `makeWorldBuildProposalCmd`. Code that keeps a value across commands MUST copy the value into plain Lua data first.
 - A node entity can be replaced by another mod between two commands. Smart Lanes (`square_smart_lanes`, "Apply automatically to new roads" On) rewrote a junction node after the first large street joined a small one (lane count 1 to 3), the game logged `Apply: invalid entity: <node>`, and the next command that used the old id failed with an empty message. Code that builds in several commands MUST find a node by position for each command.
 - A new node in a world build proposal needs an explicit `BaseNodeConfig` when its edges are streets with several lanes per direction (`town_new_large`). Without it the simulation thread asserts `it != components.end()` for component `BaseNodeConfig` on the new node, also when the whole grid is one command. A config with empty `laneConnections` and `crosswalks` is enough: the engine then makes the default routes. Grids of `town_new_small` finished without these configs. The mod `overpass_probe` states the same rule in a code comment.
+
+- `BaseNodeConfig.userModifiedLaneConnections` is read-only in a script: a write fails with `no writable member 'userModifiedLaneConnections'`. A node config copy keeps the flag it was read with.
+- The lane positions `lane0` and `lane1` of a `LaneConnection` are positions in `BASE_EDGE.laneConfigs` (pedestrian lanes included), counted from left to right when looking from the node along the street. That is the order of `laneConfigs` when the street starts at the node, and the reverse order when it ends there.
+- A script MAY copy a `BaseNodeConfig` into a `BaseNodeLaneConnectionAndEntity` and set its `laneConnections` to a new Lua list of the `LaneConnection` objects that it read from the node. A Lua table in place of such an object is refused.
 
 ## Lanes and transport modes
 

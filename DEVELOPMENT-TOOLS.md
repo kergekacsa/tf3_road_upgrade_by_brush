@@ -83,6 +83,29 @@ Source: [wiki.transportfever3.com](https://wiki.transportfever3.com).
 - **Output:** every line starts with the tag `[BrushUpgrade] [grid]` and goes to the game log. The first line names the chosen strip, the corner, the heading, and whether the grid fits the map. The second line names the template of the strip and the large template with their `simBuildable`, `crosswalk`, and `country` flags. Each finished command gives a `built` line with the first and the last segment number of the command and how many of its segments are large. With stubs, each corner logs `bend_stub` lines: `built` or `failed`, then `connections_ready` or `wait_timeout` with the number of polls, the street count, and the number of lane connections in the node config, then `config_kept` with the number of connections kept, then `removed` or `remove_failed`, then `after` with the same counts. A refused command that will be sent again gives a `retry` line. A complete run ends with a `done` line, and a command that is refused on every attempt gives a `failed_at` line with its segment numbers and the message of the game (the message can be empty). A crash in the game stops the log after the last `built` line. An error of the function, such as `no_street_near_camera`, shows in the console.
 - **Limit:** `grid_builder_test.lua` proves the geometry and the proposals against a stub of the game. It does not prove that the game accepts the proposals, so the first run in the game decides.
 
+### Traffic light and left turn removal
+
+The same module has three more console functions, `removeLights()`, `removeLeftTurns()`, and `removeLightsAndLeftTurns()`. They work on the whole map and need no strip and no camera position. They change the map at once, and the game has no undo for them. Save the game first.
+
+- **Call:** define the module once per game session, then call `removeLightsAndLeftTurns()`. The reload rule of the previous section applies:
+  `grid = ug_require("kacsa_road_upgrade_brush::/road_upgrade_brush/rub_grid_builder.tl")`
+  `grid.removeLightsAndLeftTurns()`
+  The name `grid` then holds the module, so the grid builder is `grid.build()`.
+- **Order:** the commands run in the background, and a function returns before its first command finishes. Two calls one after the other would run side by side, and `removeLeftTurns()` would skip the junctions whose light is not yet removed. `removeLightsAndLeftTurns()` starts the left turn removal after the last light command finished. To run the two by hand, call `removeLeftTurns()` only after the log shows `lights_done`.
+- **Major-minor junction:** a node with at least 3 street edges, no edge of another player, an edge with several vehicle lanes in one direction (major), and an edge with exactly one (minor). Pedestrian lanes do not count. Both functions use this test.
+- **`removeLights()`:** it takes the major-minor junctions that have a traffic light with the preference not yet "no". One command per node sets the preference to "no" and keeps the light settings of the node.
+- **`removeLeftTurns()`:** it takes all major-minor junctions, with or without a light, and skips a junction that still has a traffic light (the phases of a light point to the lane connections by position), so it needs `removeLights()` to finish first. One command per junction writes the node config again with fewer lane connections and the crosswalks unchanged:
+  - Left turns go. A turn is a left turn when the angle between the approach and the exit is over 45° to the left.
+  - U-turns stay.
+  - When a junction has exactly two major streets, they count as straight to each other, however sharply they bend at the node (the L shape of a T junction). Every other pair uses the angle.
+  - A straight connection stays between lanes of one kind: a bus lane (bus allowed, car not) to a bus lane, a normal lane to a normal lane.
+  - A right turn stays only from the outer lane of a kind to the outer lane of the same kind. The outer lane is the one at the right edge of the street in the driving direction. The code assumes traffic on the right.
+  - A connection without road (tram) stays.
+- **Lane positions:** the code reads `lane0` and `lane1` of a lane connection as positions in `laneConfigs` (pedestrian lanes included), counted from left to right when looking from the node along the street. The game documents the order but not whether pedestrian lanes count. Before it changes a junction, the code checks every road connection against that reading: the lane exists, it is no pedestrian lane, and it runs in the right direction. A junction that fails the check stays unchanged and logs `turns_skipped N lane_mismatch`.
+- **One command at a time:** each command starts in the callback of the previous one.
+- **Output:** every line starts with the tag `[BrushUpgrade] [grid]`. A run ends with `lights_done` or `turns_done` and the numbers `nodes N changed C skipped S failed F`. A refused node gives a `lights_failed` or `turns_failed` line with the game message. A skipped junction gives `turns_skipped N <reason>` with the reason `has_traffic_light`, `no_config`, `lane_mismatch`, `unchanged`, or `config_copy_failed`. A changed junction gives `turns_node N kept K of T`.
+- **Limit:** `grid_builder_test.lua` proves the filter, the rules, and the commands against a stub of the game. The first run in the game decides whether it accepts the proposals and whether the lane position reading is right.
+
 ## Other checks in the same flow
 
 - **Strings:** run `node build.js --check` in `C:\Users\Kacsa\tools\strings-gen`. It verifies every text of the mod against the 13 languages.

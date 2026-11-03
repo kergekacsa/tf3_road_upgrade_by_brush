@@ -28,6 +28,14 @@ local SEGMENT_TYPE_STREET <const> = 0
 local ROUNDING_STEPS <const> = 100
 local STUB_LENGTH_M <const> = 30
 local MIN_DIRECTION_LENGTH <const> = 0.001
+local MIN_STREETS_AT_JUNCTION <const> = 3
+local STRAIGHT_LIMIT_RAD <const> = math.pi / 4
+local TURN_U <const> = "u"
+local TURN_STRAIGHT <const> = "straight"
+local TURN_LEFT <const> = "left"
+local TURN_RIGHT <const> = "right"
+local KIND_BUS <const> = "bus"
+local KIND_NORMAL <const> = "normal"
 local FIT_TOLERANCE <const> = 1e-9
 local STUB_REMOVE <const> = "remove"
 local STUB_KEEP <const> = "keep"
@@ -564,6 +572,234 @@ function gridBuilder.build(options : RubGridOptions)
 		"heading", rounded(plan.frame.forwardX), rounded(plan.frame.forwardY), "segments", #plan.segments, "blocks", plan.options.blocksAlong, plan.options.blocksLeft, "side", plan.options.buildToRight and "right" or "left", "fits_map", tostring(fits), "build", BUILD_MARK)
 	print(LOG_TAG, "templates", describeTemplate(plan.stripTemplateName), describeTemplate(plan.largeTemplateName))
 	if fits then buildBatch(plan, 1, 1) end
+end
+
+-- The most vehicle lanes that the street has in one direction. Pedestrian lanes do not count.
+local function lanesPerDirection(street : integer) : integer
+	local edge = api.engine.getComponent(street, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+	local forward, backward = 0, 0
+	for _, lane in ipairs(edge.laneConfigs) do
+		if not lane.transportModes[api.type.enum.TransportMode.PERSON] then
+			if lane.forward then forward = forward + 1 else backward = backward + 1 end
+		end
+	end
+	return math.max(forward, backward)
+end
+
+-- A junction of at least 3 streets that joins a street with several lanes per direction to a street with one, and has no street of another player.
+local function isMajorMinorJunction(streets : {integer}, player : integer) : boolean
+	if #streets < MIN_STREETS_AT_JUNCTION then return false end
+	local hasMajor, hasMinor = false, false
+	for _, street in ipairs(streets) do
+		local owner = api.engine.getComponent(street, api.type.ComponentType.PLAYER_OWNED) as Engine.Component.PlayerOwned
+		if owner ~= nil and owner.player ~= player then return false end
+		local lanes = lanesPerDirection(street)
+		if lanes > 1 then hasMajor = true elseif lanes == 1 then hasMinor = true end
+	end
+	return hasMajor and hasMinor
+end
+
+-- A major-minor junction that has a traffic light and no preference "no" yet.
+local function hasRemovableLight(node : integer, streets : {integer}, player : integer) : boolean
+	if not isMajorMinorJunction(streets, player) then return false end
+	if api.engine.getComponent(node, api.type.ComponentType.BASE_NODE_TRAFFIC_LIGHT) == nil then return false end
+	local config = api.engine.getComponent(node, api.type.ComponentType.BASE_NODE_CONFIG) as Engine.Component.BaseNodeConfig
+	return config == nil or config.trafficLightPreference ~= api.type.enum.TrafficLightPreference.NO
+end
+
+local function nodesWhere(accepts : function(node : integer, streets : {integer}, player : integer) : boolean) : {integer}
+	local player = api.engine.util.getPlayer()
+	local nodes : {integer} = {}
+	for node, streets in pairs(api.engine.system.streetSystem.getNode2StreetEdgeMap()) do
+		if accepts(node, streets, player) then nodes[#nodes + 1] = node end
+	end
+	table.sort(nodes)
+	return nodes
+end
+
+-- One command per node, each sent in the callback of the previous one. makeCommand returns nil and a reason for a node that needs no command. onDone, when given, runs after the last command finished and the end line is logged.
+local function sendPerNode(tag : string, nodes : {integer}, makeCommand : function(node : integer) : Command<WorldBuildProposalCommandData>, string, onDone : function())
+	local changed, skipped, failed = 0, 0, 0
+	local function sendFrom(index : integer)
+		while index <= #nodes do
+			local node = nodes[index]
+			local command, reason = makeCommand(node)
+			if command ~= nil then
+				api.cmd.sendCommand(command, function(data : WorldBuildProposalCommandData, success : boolean)
+					if success then
+						changed = changed + 1
+					else
+						failed = failed + 1
+						print(LOG_TAG, tag .. "_failed", node, errorMessages(data))
+					end
+					sendFrom(index + 1)
+				end)
+				return
+			end
+			skipped = skipped + 1
+			print(LOG_TAG, tag .. "_skipped", node, reason)
+			index = index + 1
+		end
+		print(LOG_TAG, tag .. "_done", "nodes", #nodes, "changed", changed, "skipped", skipped, "failed", failed)
+		if onDone ~= nil then onDone() end
+	end
+	sendFrom(1)
+end
+
+-- Sets the traffic light preference "no" on every node that hasRemovableLight accepts.
+local function startRemoveLights(onDone : function())
+	sendPerNode("lights", nodesWhere(hasRemovableLight), function(node : integer) : Command<WorldBuildProposalCommandData>, string
+		local config = api.engine.getComponent(node, api.type.ComponentType.BASE_NODE_CONFIG) as Engine.Component.BaseNodeConfig
+		local lightConfig = config ~= nil and config.trafficLightConfig or api.type.TrafficLightConfig.new()
+		local proposal = api.engine.util.proposal.createTrafficLightProposal(node, lightConfig, api.type.enum.TrafficLightPreference.NO)
+		return api.cmd.makeWorldBuildProposalCmd(proposal, nil, false, false), nil
+	end, onDone)
+end
+
+-- A street seen from a node. Lane positions count from 0, from left to right when looking from the node along the street. That is the order of laneConfigs when the street starts at the node, and the reverse order when it ends there. Traffic keeps to the right.
+local record Approach
+	startsAtNode : boolean
+	lanes : {LaneConfig}
+	awayX : number
+	awayY : number
+	incomingOuter : {string : integer}
+	outgoingOuter : {string : integer}
+end
+
+local function laneKind(lane : LaneConfig) : string
+	local modes = lane.transportModes
+	if modes[api.type.enum.TransportMode.BUS] and not modes[api.type.enum.TransportMode.CAR] then return KIND_BUS end
+	return KIND_NORMAL
+end
+
+local function approachOf(street : integer, node : integer) : Approach
+	local edge = api.engine.getComponent(street, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+	local startsAtNode = edge.node0 == node
+	local tangent = startsAtNode and edge.tangent0 or edge.tangent1
+	local sign = startsAtNode and 1 or -1
+	local count = #edge.laneConfigs
+	local approach : Approach = { startsAtNode = startsAtNode, lanes = {}, awayX = sign * tangent.x, awayY = sign * tangent.y, incomingOuter = {}, outgoingOuter = {} }
+	for position = 1, count do
+		local lane = edge.laneConfigs[startsAtNode and position or count + 1 - position]
+		approach.lanes[position] = lane
+		if not lane.transportModes[api.type.enum.TransportMode.PERSON] then
+			local kind = laneKind(lane)
+			if lane.forward == startsAtNode then
+				approach.outgoingOuter[kind] = position - 1
+			elseif approach.incomingOuter[kind] == nil then
+				approach.incomingOuter[kind] = position - 1
+			end
+		end
+	end
+	return approach
+end
+
+-- The two lanes of a road connection, or nil when the lane positions of the connection do not fit the lanes of the streets: a lane missing, a pedestrian lane, or a lane in the wrong direction.
+local function connectionLanes(connection : LaneConnection, approaches : {integer : Approach}) : LaneConfig, LaneConfig
+	local from, to = approaches[connection.segment0], approaches[connection.segment1]
+	if from == nil or to == nil then return nil, nil end
+	local inLane, outLane = from.lanes[connection.lane0 + 1], to.lanes[connection.lane1 + 1]
+	if inLane == nil or outLane == nil then return nil, nil end
+	if inLane.transportModes[api.type.enum.TransportMode.PERSON] or outLane.transportModes[api.type.enum.TransportMode.PERSON] then return nil, nil end
+	if inLane.forward == from.startsAtNode or outLane.forward ~= to.startsAtNode then return nil, nil end
+	return inLane, outLane
+end
+
+-- The turn from one street into another. Two streets that are the only major streets of the node count as straight, however sharply they bend at the node.
+local function turnBetween(from : integer, to : integer, approaches : {integer : Approach}, bothOnlyMajor : boolean) : string
+	if from == to then return TURN_U end
+	if bothOnlyMajor then return TURN_STRAIGHT end
+	local a, b = approaches[from], approaches[to]
+	local inX, inY = -a.awayX, -a.awayY
+	local angle = math.atan(inX * b.awayY - inY * b.awayX, inX * b.awayX + inY * b.awayY)
+	if math.abs(angle) <= STRAIGHT_LIMIT_RAD then return TURN_STRAIGHT end
+	return angle > 0 and TURN_LEFT or TURN_RIGHT
+end
+
+-- Left turns go. U-turns stay. A straight connection stays between lanes of one kind. A right turn stays from the outer lane of a kind to the outer lane of the same kind.
+local function keepsConnection(connection : LaneConnection, inLane : LaneConfig, outLane : LaneConfig, from : Approach, to : Approach, turn : string) : boolean
+	if turn == TURN_U then return true end
+	if turn == TURN_LEFT then return false end
+	local kind = laneKind(inLane)
+	if kind ~= laneKind(outLane) then return false end
+	if turn == TURN_STRAIGHT then return true end
+	return connection.lane0 == from.incomingOuter[kind] and connection.lane1 == to.outgoingOuter[kind]
+end
+
+-- A copy of the node config with the given lane connections. Returns nil and the message when the game refuses the copy.
+local function configWithConnections(node : integer, config : Engine.Component.BaseNodeConfig, kept : {LaneConnection}) : Proposal.BaseNodeLaneConnectionAndEntity, string
+	local entry = api.type.BaseNodeLaneConnectionAndEntity.new()
+	entry.entity = node
+	local message = ""
+	local copied = xpcall(function()
+		entry.comp = config
+		entry.comp.laneConnections = kept
+	end, function(problem : any) message = tostring(problem) end)
+	if not copied then return nil, message end
+	return entry, nil
+end
+
+-- The node config without the connections that the rules of keepsConnection remove, and the text "kept of total". Returns nil and a reason when the node stays as it is.
+local function leftTurnFreeConfig(node : integer) : Proposal.BaseNodeLaneConnectionAndEntity, string
+	if api.engine.getComponent(node, api.type.ComponentType.BASE_NODE_TRAFFIC_LIGHT) ~= nil then return nil, "has_traffic_light" end
+	local config = api.engine.getComponent(node, api.type.ComponentType.BASE_NODE_CONFIG) as Engine.Component.BaseNodeConfig
+	if config == nil then return nil, "no_config" end
+	local approaches : {integer : Approach} = {}
+	local majors : {integer : boolean} = {}
+	local majorCount = 0
+	for _, street in ipairs(streetSegmentsAt(node)) do
+		approaches[street] = approachOf(street, node)
+		if lanesPerDirection(street) > 1 then
+			majors[street] = true
+			majorCount = majorCount + 1
+		end
+	end
+	local connections = config.laneConnections or {}
+	local kept : {LaneConnection} = {}
+	for _, connection in ipairs(connections) do
+		if connection.withRoad then
+			local inLane, outLane = connectionLanes(connection, approaches)
+			if inLane == nil then return nil, "lane_mismatch" end
+			local bothOnlyMajor = majorCount == 2 and majors[connection.segment0] == true and majors[connection.segment1] == true
+			local turn = turnBetween(connection.segment0, connection.segment1, approaches, bothOnlyMajor)
+			if keepsConnection(connection, inLane, outLane, approaches[connection.segment0], approaches[connection.segment1], turn) then kept[#kept + 1] = connection end
+		else
+			kept[#kept + 1] = connection
+		end
+	end
+	if #kept == #connections then return nil, "unchanged" end
+	local entry, message = configWithConnections(node, config, kept)
+	if entry == nil then return nil, "config_copy_failed " .. message end
+	return entry, #kept .. " of " .. #connections
+end
+
+-- Rewrites the lane connections of every major-minor junction: no left turns, straight only between lanes of one kind (bus or normal), right turns only from the outer lane to the outer lane of one kind. A junction with a traffic light is skipped, because its light phases refer to the connections by position.
+local function startRemoveLeftTurns(onDone : function())
+	local context = api.type.Context.new()
+	context.player = api.engine.util.getPlayer()
+	local nodes = nodesWhere(function(_node : integer, streets : {integer}, player : integer) : boolean return isMajorMinorJunction(streets, player) end)
+	sendPerNode("turns", nodes, function(node : integer) : Command<WorldBuildProposalCommandData>, string
+		local entry, detail = leftTurnFreeConfig(node)
+		if entry == nil then return nil, detail end
+		print(LOG_TAG, "turns_node", node, "kept", detail)
+		local proposal = api.type.SimpleProposal.new()
+		proposal.streetProposal.nodeConfigsToRemove = { node }
+		proposal.streetProposal.nodeConfigsToAdd = { entry }
+		return api.cmd.makeWorldBuildProposalCmd(proposal, context, false, true), nil
+	end, onDone)
+end
+
+function gridBuilder.removeLights()
+	startRemoveLights(nil)
+end
+
+function gridBuilder.removeLeftTurns()
+	startRemoveLeftTurns(nil)
+end
+
+-- Runs removeLights, then removeLeftTurns after the last light command finished.
+function gridBuilder.removeLightsAndLeftTurns()
+	startRemoveLights(function() startRemoveLeftTurns(nil) end)
 end
 
 return gridBuilder
