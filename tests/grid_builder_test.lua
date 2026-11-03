@@ -49,12 +49,14 @@ local function near(a, b) return math.abs(a - b) < 1e-6 end
 -- `invalidateStripAfter`: after that many commands the stub wipes every view of the strip, as the engine can do with the data behind a component.
 -- The number of ticks (wait commands) after a street is added before a node with three streets shows its lane connections, as another mod writes them a moment later.
 local connectionDelayTicks = 0
+-- While true, a node config refuses a list of lane connections.
+local refuseLaneLists = false
 local function runWorld(p0, p1, options, failAt, year, invalidateStripAfter, replaceCornerAfter)
   local ownerView = { player = OWNER_PLAYER }
   local world = { nodes = { [10] = { position = p0 }, [11] = { position = p1 } }, edges = {}, applied = {}, queue = {}, next = FIRST_NEW_ID }
   local edges = {
     [5] = { roadType = "TRACK", position0 = p0, position1 = p1 },
-    [7] = { roadType = "STREET", node0 = 10, node1 = 11, position0 = p0, position1 = p1, roadTemplate = "town_medium", typeIndex = -1, distance = 0, edgeDecorations = { STRIP_DECORATION } },
+    [7] = { roadType = "STREET", node0 = 10, node1 = 11, position0 = p0, position1 = p1, roadTemplate = "town_medium", typeIndex = -1, distance = 0, edgeDecorations = { STRIP_DECORATION }, laneConfigs = laneLayout("strip", 1) },
     [3] = { roadType = "STREET", node0 = 12, node1 = 13, position0 = vec(p0.x + 90, p0.y + 90, 0), position1 = vec(p1.x + 90, p1.y + 90, 0), roadTemplate = "country_small", typeIndex = -1, distance = 0 },
   }
   local record = function() return { new = function() return { comp = {} } end } end
@@ -70,7 +72,16 @@ local function runWorld(p0, p1, options, failAt, year, invalidateStripAfter, rep
       Vec2f = { new = function(x, y) return { x = x, y = y } end },
       Vec3f = { new = vec },
       PlayerOwned = record(),
-      BaseNodeLaneConnectionAndEntity = record(),
+      LaneConnection = { new = function() return {} end },
+      BaseNodeLaneConnectionAndEntity = { new = function()
+        -- Like the game: userModifiedLaneConnections is not writable.
+        local comp = setmetatable({}, { __newindex = function(table, key, value)
+          if key == "userModifiedLaneConnections" then error("no writable member '" .. key .. "'") end
+          if refuseLaneLists and key == "laneConnections" and #value > 0 then error("bad argument #4 to '?' (const LaneConnection expected, got no value)") end
+          rawset(table, key, value)
+        end })
+        return { comp = comp }
+      end },
       NodeAndEntity = record(),
       SegmentAndEntity = record(),
       SimpleProposal = { new = function() return { streetProposal = {} } end },
@@ -160,7 +171,7 @@ local function runWorld(p0, p1, options, failAt, year, invalidateStripAfter, rep
   _G.print = function(...) out[#out + 1] = table.concat({ ... }, " ") end
   local effective = {}
   for key, value in pairs(options or {}) do effective[key] = value end
-  if not effective.defaultBend and effective.bendStubs == nil then effective.bendStubs = "off" end
+  if not effective.defaultBend and effective.laneConnections == nil then effective.laneConnections = "off" end
   local ok, err = pcall(gridBuilder.build, effective)
   local sequential = true
   local guard = 0
@@ -253,7 +264,7 @@ support.check("one command per segment: 110 commands", east.commands == GRID_EDG
 support.check("a command is sent only after the previous one finished", east.sequential)
 support.check("the search is a circle of 150 m around the camera centre over edges",
   east.octreeCalls[1].centre.x == 145 and east.octreeCalls[1].centre.y == 197 and east.octreeCalls[1].radius == 150 and east.octreeCalls[1].component == "BASE_EDGE")
-support.check("the first log line ends with the build mark of the module", east.out[1]:find("build 2026-11-02 sideandlength", 1, true) ~= nil, east.out[1])
+support.check("the first log line ends with the build mark of the module", east.out[1]:find("build 2026-11-03 stemorder", 1, true) ~= nil, east.out[1])
 support.check("the log names the strip nearest to the camera", east.out[1]:find("strip 7 ", 1, true) ~= nil and east.out[1]:find("corner 180", 1, true) ~= nil, east.out[1])
 support.check("a finished command logs its segment numbers and how many of them are large", east.out[3]:find("built 1 1 large 1", 1, true) ~= nil and east.out[4]:find("built 2 2 large 1", 1, true) ~= nil, east.out[3] .. " | " .. east.out[4])
 support.check("the log names both templates with their lot flags", east.out[2]:find("templates", 1, true) ~= nil and east.out[2]:find("town_medium simBuildable=", 1, true) ~= nil and east.out[2]:find(LARGE_NEW .. " simBuildable=", 1, true) ~= nil, east.out[2])
@@ -508,8 +519,8 @@ local function countNewNodes(result)
 end
 local function logText(result) return table.concat(result.out, "\n") end
 local STUB_END = 30 / math.sqrt(2)
-local stubbed = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "remove" })
-support.check("bendStubs remove: 110 segment commands, then a build and a removal for each of the 3 corners", stubbed.ok and stubbed.commands == GRID_EDGES + 6, stubbed.commands)
+local stubbed = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_remove" })
+support.check("stub_remove: 110 segment commands, then a build and a removal for each of the 3 corners", stubbed.ok and stubbed.commands == GRID_EDGES + 6, stubbed.commands)
 local expectedStarts = { { 180 + ALONG * ALONG_M, 200 }, { 180, 200 + LEFT * LEFT_M }, { 180 + ALONG * ALONG_M, 200 + LEFT * LEFT_M } }
 local expectedEnds = {
   { expectedStarts[1][1] + STUB_END, expectedStarts[1][2] - STUB_END },
@@ -539,17 +550,17 @@ support.check("after the removals only the 110 grid streets and 62 new nodes are
 support.check("the log names each corner and ends with done",
   stubbed.out[#stubbed.out]:find("done 110", 1, true) ~= nil and logText(stubbed):find("bend_stub 6:0 built", 1, true) ~= nil
   and logText(stubbed):find("bend_stub 0:8 removed", 1, true) ~= nil and logText(stubbed):find("bend_stub 6:8 removed", 1, true) ~= nil)
-local kept = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "keep" })
-support.check("bendStubs keep: the 3 stubs are built and stay", kept.ok and kept.commands == GRID_EDGES + 3 and countEdges(kept) == GRID_EDGES + 3 and countNewNodes(kept) == GRID_NODES - 1 + 3, kept.commands .. " " .. countEdges(kept))
-local noStubs = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "off" })
-support.check("bendStubs off: no stub", noStubs.commands == GRID_EDGES and countEdges(noStubs) == GRID_EDGES)
+local kept = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_keep" })
+support.check("stub_keep: the 3 stubs are built and stay", kept.ok and kept.commands == GRID_EDGES + 3 and countEdges(kept) == GRID_EDGES + 3 and countNewNodes(kept) == GRID_NODES - 1 + 3, kept.commands .. " " .. countEdges(kept))
+local noStubs = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "off" })
+support.check("laneConnections off: no stub and no write", noStubs.commands == GRID_EDGES and countEdges(noStubs) == GRID_EDGES)
 local byDefault = runWorld(vec(100, 200, 0), vec(180, 200, 0), { defaultBend = true })
-support.check("default with large streets: a stub is built and removed at each of the 3 corners", byDefault.commands == GRID_EDGES + 6 and countEdges(byDefault) == GRID_EDGES, byDefault.commands)
+support.check("default with large streets: the lane connections of all 63 grid nodes are written, one command each", byDefault.commands == GRID_EDGES + GRID_NODES and countEdges(byDefault) == GRID_EDGES, byDefault.commands)
 local byDefaultPlain = runWorld(vec(100, 200, 0), vec(180, 200, 0), { defaultBend = true, largeEveryAlong = 0, largeEveryLeft = 0 })
-support.check("default without large streets: no stub", byDefaultPlain.commands == GRID_EDGES)
+support.check("default without large streets: no write and no stub", byDefaultPlain.commands == GRID_EDGES)
 local byDefaultNoConfigs = runWorld(vec(100, 200, 0), vec(180, 200, 0), { defaultBend = true, explicitNodeConfigs = false })
-support.check("default with explicitNodeConfigs=false: no stub", byDefaultNoConfigs.commands == GRID_EDGES)
-local rightStubs = runWorld(vec(100, 200, 0), vec(180, 200, 0), { defaultBend = true, buildToRight = true })
+support.check("default with explicitNodeConfigs=false: no write and no stub", byDefaultNoConfigs.commands == GRID_EDGES)
+local rightStubs = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_remove", buildToRight = true })
 local rightEnds = {}
 for corner = 1, 3 do
   local buildRecord = rightStubs.world.applied[GRID_EDGES + corner * 2 - 1]
@@ -558,16 +569,16 @@ for corner = 1, 3 do
 end
 support.check("buildToRight: a stub is built and removed at each corner, pointing away from the grid", rightStubs.commands == GRID_EDGES + 6 and countEdges(rightStubs) == GRID_EDGES
   and #rightEnds == 3 and rightEnds[1].x > 1044 and rightEnds[2].y < 200 - LEFT * LEFT_M + 1 and rightEnds[2].x < 180 and rightEnds[3].x > 1044 and rightEnds[3].y < 200 - LEFT * LEFT_M + 1, rightStubs.commands)
-local stubFails = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "remove" }, GRID_EDGES + 1)
+local stubFails = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_remove" }, GRID_EDGES + 1)
 support.check("a stub that the game refuses is logged and the next corner still runs", stubFails.ok and stubFails.commands == GRID_EDGES + 5
   and logText(stubFails):find("bend_stub 6:0 failed Collision", 1, true) ~= nil and stubFails.out[#stubFails.out]:find("done 110", 1, true) ~= nil, stubFails.commands)
-local oneBlock = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "remove", blocksAlong = 1, blocksLeft = 1 })
+local oneBlock = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_remove", blocksAlong = 1, blocksLeft = 1 })
 support.check("a 1 by 1 grid has 3 bend corners and gets 3 stubs", oneBlock.ok and oneBlock.commands == 4 + 6 and countEdges(oneBlock) == 4, oneBlock.commands)
-local oneRow = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "remove", blocksLeft = 0 })
+local oneRow = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_remove", blocksLeft = 0 })
 support.check("a grid without blocks to the left has no bend corner and ends with done", oneRow.ok and oneRow.out[#oneRow.out]:find("done", 1, true) ~= nil and oneRow.commands == ALONG, oneRow.commands)
 
 -- The removal of a stub writes the node config of the corner again without the connections that touch the stub and without crosswalks.
-local configStubbed = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "remove" })
+local configStubbed = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_remove" })
 local configsOk, configsDetail = true, ""
 for corner = 1, 3 do
   local buildRecord = configStubbed.world.applied[GRID_EDGES + corner * 2 - 1]
@@ -592,19 +603,147 @@ support.check("the log gives the connections before the removal and after it for
 
 -- The stub stays until another mod has written the lane connections of the node.
 connectionDelayTicks = 3
-local delayed = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "remove" })
+local delayed = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_remove" })
 support.check("the removal waits for the connections: 3 wait commands for each corner, then the removal", delayed.ok and delayed.commands == GRID_EDGES + 3 * (1 + 3 + 1) and countEdges(delayed) == GRID_EDGES, delayed.commands)
 support.check("the log gives the number of polls", table.concat(delayed.out, "\n"):find("bend_stub 6:0 connections_ready polls 3 streets 3 connections 6", 1, true) ~= nil)
 connectionDelayTicks = math.huge
-local neverReady = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "remove" })
+local neverReady = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_remove" })
 support.check("connections that never appear leave the stubs in place and are logged", neverReady.ok and countEdges(neverReady) == GRID_EDGES + 3
   and table.concat(neverReady.out, "\n"):find("bend_stub 6:0 wait_timeout polls 150 streets 3 connections 0", 1, true) ~= nil and neverReady.out[#neverReady.out]:find("done 110", 1, true) ~= nil)
 connectionDelayTicks = 0
-local keptNoRewrite = runWorld(vec(100, 200, 0), vec(180, 200, 0), { bendStubs = "keep" })
+local keptNoRewrite = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "stub_keep" })
 local rewrites = 0
 for _, record in ipairs(keptNoRewrite.world.applied) do rewrites = rewrites + #record.rewrittenConfigs end
-support.check("bendStubs keep: no node config is rewritten", rewrites == 0)
+support.check("stub_keep: no node config is rewritten", rewrites == 0)
 
+
+-- laneConnections "own": the function writes the lane connections of every grid node, every street into every other street.
+local own = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "own" })
+support.check("own: one write command for each of the 63 grid nodes after the 110 segments", own.ok and own.commands == GRID_EDGES + GRID_NODES and countEdges(own) == GRID_EDGES, own.commands)
+local function writeOf(result, alongIndex, leftIndex) return result.world.applied[GRID_EDGES + alongIndex * (LEFT + 1) + leftIndex + 1] end
+local cornersOk, cornersDetail = true, ""
+for _, corner in ipairs({ { 6, 0 }, { 0, 8 }, { 6, 8 } }) do
+  local record = writeOf(own, corner[1], corner[2])
+  local written = record and record.rewrittenConfigs[1]
+  if not (written and #record.edges == 0 and record.newNodes == 0 and record.removedConfigs and #record.removedConfigs == 1 and record.removedConfigs[1] == written.node
+      and #written.lanes == 6 and #written.crosswalks == 0) then
+    cornersOk = false
+    cornersDetail = cornersDetail .. corner[1] .. ":" .. corner[2] .. " shape "
+  else
+    for _, lane in ipairs(written.lanes) do
+      if not (lane.segment0 ~= lane.segment1 and lane.lane0 >= 1 and lane.lane0 <= 3 and lane.lane1 >= 4 and lane.lane1 <= 6 and lane.lane0 + lane.lane1 == 7 and lane.withRoad == true and lane.withTram == false) then
+        cornersOk = false
+        cornersDetail = cornersDetail .. corner[1] .. ":" .. corner[2] .. " lane " .. lane.lane0 .. ">" .. lane.lane1 .. " "
+      end
+    end
+  end
+end
+support.check("own: a corner of two large streets gets the 6 mirrored lane pairs 3 to 4, 2 to 5, 1 to 6, in both directions", cornersOk, cornersDetail)
+local inner = writeOf(own, 1, 1).rewrittenConfigs[1]
+support.check("own: a crossing of four one-lane streets gets 12 connections, each street into the 3 others", #inner.lanes == 12, #inner.lanes)
+local ownText = table.concat(own.out, "\n")
+support.check("own: the log gives the counts and the run ends with done", ownText:find("lane_connections written 63 failed 0 refused 0 skipped 0", 1, true) ~= nil and own.out[#own.out]:find("done 110", 1, true) ~= nil)
+local ownFails = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "own" }, GRID_EDGES + 1)
+support.check("own: a write that the game refuses is logged and the next node still runs", ownFails.ok and ownFails.commands == GRID_EDGES + GRID_NODES
+  and table.concat(ownFails.out, "\n"):find("lane_connections 0:0 failed Collision", 1, true) ~= nil and table.concat(ownFails.out, "\n"):find("written 62 failed 1", 1, true) ~= nil)
+refuseLaneLists = true
+local ownRefused = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "own" })
+refuseLaneLists = false
+support.check("own: a game that takes no connection list sends nothing and logs the refusal", ownRefused.ok and ownRefused.commands == GRID_EDGES
+  and table.concat(ownRefused.out, "\n"):find("lane_connections 0:0 refused", 1, true) ~= nil and table.concat(ownRefused.out, "\n"):find("written 0 failed 0 refused 63", 1, true) ~= nil and ownRefused.out[#ownRefused.out]:find("done 110", 1, true) ~= nil)
+
+do
+-- The lane rules at a node. The large streets have lanes 1 to 3 into the node and 4 to 6 out of it, the one-lane streets have lane 1 in and lane 2 out.
+local function bySource(lanes)
+  local groups = {}
+  for _, lane in ipairs(lanes) do
+    groups[lane.segment0] = groups[lane.segment0] or {}
+    table.insert(groups[lane.segment0], lane)
+  end
+  return groups
+end
+local function groupSizes(groups)
+  local sizes = {}
+  for _, group in pairs(groups) do sizes[#sizes + 1] = #group end
+  table.sort(sizes)
+  return table.concat(sizes, ",")
+end
+local function laneSet(group)
+  local seen = {}
+  for _, lane in ipairs(group) do seen[lane.lane0] = true end
+  return seen
+end
+
+-- A crossing of two large streets: straight ahead lane to lane from the lanes 3 and 2, a right turn only from the curb lane 1, which does not go straight, into the curb lane 6, a left turn only from the lane next to the centre line 3 into the lane next to the centre line 4.
+local crossing = writeOf(own, 3, 4).rewrittenConfigs[1]
+local crossingGroups = bySource(crossing.lanes)
+support.check("crossing of large streets: 16 connections, 4 from each of the 4 streets", #crossing.lanes == 16 and groupSizes(crossingGroups) == "4,4,4,4", #crossing.lanes .. " " .. groupSizes(crossingGroups))
+local crossingOk, crossingDetail = true, ""
+for source, group in pairs(crossingGroups) do
+  local perTarget = {}
+  for _, lane in ipairs(group) do
+    perTarget[lane.segment1] = perTarget[lane.segment1] or {}
+    table.insert(perTarget[lane.segment1], lane)
+  end
+  local straightTargets, turnLanes = 0, {}
+  for target, lanes in pairs(perTarget) do
+    if #lanes == 2 then
+      straightTargets = straightTargets + 1
+      for _, lane in ipairs(lanes) do if lane.lane0 + lane.lane1 ~= 7 then crossingOk = false; crossingDetail = crossingDetail .. source .. " straight " end end
+    elseif #lanes == 1 then
+      turnLanes[#turnLanes + 1] = lanes[1]
+    else
+      crossingOk = false
+      crossingDetail = crossingDetail .. source .. " count " .. #lanes .. " "
+    end
+  end
+  table.sort(turnLanes, function(first, second) return first.lane0 < second.lane0 end)
+  if not (straightTargets == 1 and #turnLanes == 2 and turnLanes[1].lane0 == 1 and turnLanes[1].lane1 == 6 and turnLanes[2].lane0 == 3 and turnLanes[2].lane1 == 4) then
+    crossingOk = false
+    crossingDetail = crossingDetail .. source .. " turns "
+  end
+end
+support.check("crossing of large streets: straight on from the lanes 3 and 2 only, right turn 1 to 6 only from the curb lane, left turn 3 to 4", crossingOk, crossingDetail)
+
+-- The stem of a T has no street straight ahead: its inner lane goes left and its two outer lanes go right, the curb lane into the curb lane and the next lane into the next lane, so every lane has a connection.
+local stemNode = writeOf(own, 0, 4).rewrittenConfigs[1]
+local stemGroups = bySource(stemNode.lanes)
+local stemSource
+for source, group in pairs(stemGroups) do
+  local distinctTargets, count = {}, 0
+  for _, lane in ipairs(group) do
+    if not distinctTargets[lane.lane1] then distinctTargets[lane.lane1] = true; count = count + 1 end
+  end
+  local edge = own.edges[source]
+  if #group == 3 and math.abs(edge.position0.y - edge.position1.y) < 1e-6 then stemSource = source end
+end
+local stemTargets = {}
+for _, lane in ipairs(stemSource and stemGroups[stemSource] or {}) do stemTargets[lane.lane0] = lane.lane1 end
+support.check("stem of a T: 10 connections, every lane of the stem has one, the inner lane 3 goes left into lane 4, the lane 2 goes right into lane 5, the curb lane 1 goes right into lane 6",
+  #stemNode.lanes == 10 and groupSizes(stemGroups) == "3,3,4" and stemTargets[3] == 4 and stemTargets[2] == 5 and stemTargets[1] == 6, #stemNode.lanes .. " " .. groupSizes(stemGroups))
+
+-- A large street crossing a one-lane street: every lane of every street has a connection.
+local mixed = writeOf(own, 1, 4).rewrittenConfigs[1]
+local mixedGroups = bySource(mixed.lanes)
+local mixedCovered = true
+for _, group in pairs(mixedGroups) do
+  local seen = laneSet(group)
+  local large = seen[3] ~= nil or seen[2] ~= nil
+  if large and not (seen[1] and seen[2] and seen[3]) then mixedCovered = false end
+  if not large and not seen[1] then mixedCovered = false end
+end
+support.check("large street crossing a one-lane street: 14 connections and every incoming lane has one", #mixed.lanes == 14 and mixedCovered, #mixed.lanes .. " " .. groupSizes(mixedGroups))
+
+-- A corner where a large street meets a one-lane street: the 3 lanes merge into the single lane, and the single lane goes into all 3 lanes.
+local narrow = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "own", largeEveryAlong = 1, largeEveryLeft = 0 })
+local narrowCorner = narrow.world.applied[GRID_EDGES + 6 * (LEFT + 1) + 1].rewrittenConfigs[1]
+local merged, widened = 0, 0
+for _, lane in ipairs(narrowCorner.lanes) do
+  if lane.lane0 >= 1 and lane.lane0 <= 3 and lane.lane1 == 2 then merged = merged + 1 end
+  if lane.lane0 == 1 and lane.lane1 >= 4 and lane.lane1 <= 6 then widened = widened + 1 end
+end
+support.check("corner of a large and a one-lane street: 3 lanes merge into the one lane, the one lane fans out into all 3 lanes of the large street", #narrowCorner.lanes == 6 and merged == 3 and widened == 3, #narrowCorner.lanes .. " " .. merged .. " " .. widened)
+end
 
 -- Every option replaces its default: a 2 by 3 block grid with blocks of 100 m along and 50 m to the left.
 local small = runWorld(vec(100, 200, 0), vec(180, 200, 0), { blocksAlong = 2, blocksLeft = 3, blockLengthAlongM = 100, blockLengthLeftM = 50, largeEveryAlong = 0, largeEveryLeft = 0, cameraSearchRadiusM = 90, nodeSnapRadiusM = 2 })

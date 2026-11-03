@@ -188,10 +188,10 @@ global record RubGridOptions
 	largeStreetBaseNames : {string}
 	--- Street segments in one command, 0 for all of them in one command (1). A node that segments of one command share is made once, with all its edges.
 	edgesPerCommand : integer
-	--- true adds an empty node config (default lane connections, no crosswalks) for every new node of a command. The default is true when a large street is in the grid, else false. Streets with several lanes per direction need it.
+	--- true adds an empty node config (no lane connections, no crosswalks) for every new node of a command. The default is true when a large street is in the grid, else false. Streets with several lanes per direction need it.
 	explicitNodeConfigs : boolean
-	--- What to do at the grid corners that keep only two streets, which have no lane connections after an empty node config: "remove" builds a short plain street out of the corner and removes it again, "keep" builds it and leaves it, "off" does nothing. The default is "remove" when explicitNodeConfigs is true, else "off".
-	bendStubs : string
+	--- How the nodes get lane connections, which an empty node config lacks. "own" writes them for every grid node after the last segment: straight on lane to lane (extra lanes merge into the curb lane, the lanes of a narrower street share the lanes of a wider one, and the curb lane of a street with several lanes only turns right), turns only from the curb lane to the right and from the lane next to the centre line to the left, each turn ending in the closest lane of the new street; a corner of two streets keeps parallel curves. "stub_remove" builds a short plain street out of each corner that keeps two streets, waits until another mod (Smart Lanes) has written the connections, and removes the street. "stub_keep" builds the street and leaves it. "off" does nothing. The default is "own" when explicitNodeConfigs is true, else "off".
+	laneConnections : string
 end
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_grid_builder.tl" as RubGridBuilderModule
 global record RubGridBuilderModule

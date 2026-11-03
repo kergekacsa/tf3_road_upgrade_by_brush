@@ -7,7 +7,7 @@ local templates = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_
 local gridBuilder : RubGridBuilderModule = {}
 
 local LOG_TAG <const> = "[BrushUpgrade] [grid]"
-local BUILD_MARK <const> = "2026-11-02 sideandlength"
+local BUILD_MARK <const> = "2026-11-03 stemorder"
 local DEFAULT_BLOCKS_ALONG <const> = 6
 local DEFAULT_BLOCKS_LEFT <const> = 8
 local DEFAULT_BLOCK_LENGTH_ALONG_M <const> = 144
@@ -37,9 +37,15 @@ local TURN_RIGHT <const> = "right"
 local KIND_BUS <const> = "bus"
 local KIND_NORMAL <const> = "normal"
 local FIT_TOLERANCE <const> = 1e-9
-local STUB_REMOVE <const> = "remove"
-local STUB_KEEP <const> = "keep"
-local STUB_OFF <const> = "off"
+local STRAIGHT_MIN_DOT <const> = 0.866
+local MOVE_STRAIGHT <const> = "straight"
+local MOVE_LEFT <const> = "left"
+local MOVE_RIGHT <const> = "right"
+local MOVE_BACK <const> = "back"
+local LANES_OWN <const> = "own"
+local LANES_STUB_REMOVE <const> = "stub_remove"
+local LANES_STUB_KEEP <const> = "stub_keep"
+local LANES_OFF <const> = "off"
 local KMH_PER_MS <const> = 3.6
 local DEFAULT_SMALL_ROAD_KMH <const> = 30
 local SPEED_TOLERANCE_MS <const> = 0.001
@@ -120,7 +126,7 @@ local function withDefaults(options : RubGridOptions) : RubGridOptions
 		largeStreetBaseNames = given.largeStreetBaseNames or DEFAULT_LARGE_BASE_NAMES,
 		edgesPerCommand = given.edgesPerCommand or DEFAULT_EDGES_PER_COMMAND,
 		explicitNodeConfigs = explicitNodeConfigs,
-		bendStubs = given.bendStubs or (explicitNodeConfigs and STUB_REMOVE or STUB_OFF),
+		laneConnections = given.laneConnections or (explicitNodeConfigs and LANES_OWN or LANES_OFF),
 	}
 end
 
@@ -391,7 +397,7 @@ local function waitForConnections(node : integer, onDone : function(boolean, int
 	check()
 end
 
--- A node that gets its third street has its connections made again by another mod (Smart Lanes) a moment later. Corners that keep two streets are given a short plain street for that. With bendStubs "remove" the street is removed once the node has its connections. The removal writes the node config again without the connections that touch the street.
+-- A node that gets its third street has its connections made again by another mod (Smart Lanes) a moment later. Corners that keep two streets are given a short plain street for that. With laneConnections "stub_remove" the street is removed once the node has its connections. The removal writes the node config again without the connections that touch the street.
 local function buildStub(plan : Plan, corner : {integer}, onFinished : function())
 	local label = corner[1] .. ":" .. corner[2]
 	local node = gridPoint(plan, corner[1], corner[2]).nodeId
@@ -422,7 +428,7 @@ local function buildStub(plan : Plan, corner : {integer}, onFinished : function(
 			return
 		end
 		print(LOG_TAG, "bend_stub", label, "built")
-		if plan.options.bendStubs ~= STUB_REMOVE then
+		if plan.options.laneConnections ~= LANES_STUB_REMOVE then
 			onFinished()
 			return
 		end
@@ -464,10 +470,193 @@ local function buildStub(plan : Plan, corner : {integer}, onFinished : function(
 	end)
 end
 
-local function finishBends(plan : Plan)
-	local stubs = plan.options.bendStubs == STUB_REMOVE or plan.options.bendStubs == STUB_KEEP
+local record LaneRoles
+	incoming : {integer}
+	outgoing : {integer}
+end
+
+-- The vehicle lanes of a street as seen from one of its end nodes, with the lane numbers that the game counts from the node: from left to right when looking from the node along the street, so the lanes that lead to the node come first. Each list starts with the lane next to the centre line and ends with the curb lane.
+local function laneRoles(street : integer, node : integer) : LaneRoles
+	local edge = api.engine.getComponent(street, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+	local lanes = edge.laneConfigs
+	local count = #lanes
+	local centre = (count - 1) / 2
+	local startsAtNode = edge.node0 == node
+	local modes = api.type["enum"].TransportMode
+	local roles : LaneRoles = { incoming = {}, outgoing = {} }
+	for position = 1, count do
+		local lane = lanes[position]
+		if not lane.transportModes[modes.PERSON] and not lane.transportModes[modes.CARGO] then
+			local number = startsAtNode and position - 1 or count - position
+			local leadsToNode = lane.forward ~= startsAtNode
+			local list = leadsToNode and roles.incoming or roles.outgoing
+			list[#list + 1] = number
+		end
+	end
+	local function nearerToCentre(first : integer, second : integer) : boolean
+		return math.abs(first - centre) < math.abs(second - centre)
+	end
+	table.sort(roles.incoming, nearerToCentre)
+	table.sort(roles.outgoing, nearerToCentre)
+	return roles
+end
+
+-- The unit direction along a street away from one of its end nodes.
+local function directionAway(street : integer, node : integer) : number, number
+	local edge = api.engine.getComponent(street, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+	local origin = nodePosition(node)
+	local far = edge.node0 == node and edge.position1 or edge.position0
+	local dx, dy = far.x - origin.x, far.y - origin.y
+	local length = math.sqrt(dx * dx + dy * dy)
+	return dx / length, dy / length
+end
+
+-- How a vehicle that arrives along one street leaves along another: "straight", "left", "right", or "back".
+local function movementKind(fromAwayX : number, fromAwayY : number, toAwayX : number, toAwayY : number) : string
+	local travelX, travelY = -fromAwayX, -fromAwayY
+	local dot = travelX * toAwayX + travelY * toAwayY
+	local cross = travelX * toAwayY - travelY * toAwayX
+	if dot >= STRAIGHT_MIN_DOT then return MOVE_STRAIGHT end
+	if dot <= -STRAIGHT_MIN_DOT then return MOVE_BACK end
+	return cross > 0 and MOVE_LEFT or MOVE_RIGHT
+end
+
+-- api.type.LaneConnection exists in the game but not in its Teal definitions. The game takes only its own objects in the list of a node config.
+local function newLaneConnection(from : integer, fromLane : integer, to : integer, toLane : integer) : LaneConnection
+	local factory = (api.type as {string : any})["LaneConnection"] as {string : function() : LaneConnection}
+	local connection = factory["new"]()
+	connection.segment0 = from
+	connection.lane0 = fromLane
+	connection.segment1 = to
+	connection.lane1 = toLane
+	connection.withRoad = true
+	connection.withTram = false
+	return connection
+end
+
+-- The outgoing lanes of a street that the lane at a position (counted from the centre line) of a street with fromCount lanes leads to: the lane at the same position, the curb lane when the other street has fewer lanes, and a share of the lanes when it has more, so that every lane of the wider street is fed.
+local function lanesInto(toRoles : LaneRoles, position : integer, fromCount : integer) : {integer}
+	local toCount = #toRoles.outgoing
+	local lanes : {integer} = {}
+	if toCount <= fromCount then
+		lanes[1] = toRoles.outgoing[math.min(position, toCount)]
+	else
+		for index = (position - 1) * toCount // fromCount + 1, position * toCount // fromCount do lanes[#lanes + 1] = toRoles.outgoing[index] end
+	end
+	return lanes
+end
+
+-- The lane connections of a node. At a node of two streets each incoming lane goes to the outgoing lane at the same position, extra lanes merge into the curb lane, and the lanes of a narrower street share the lanes of a wider one. At a crossing of more streets every lane goes straight on in the same way, except the curb lane of a street with several lanes, which only turns right. A right turn starts only in the curb lane and ends in the curb lane of the new street. A left turn starts only in the lane next to the centre line and ends in the lane next to the centre line of the new street. A street with no street straight ahead (the stem of a T) sends its outer lanes right and its inner lanes left, so that every lane has a connection. Lanes that turn the same way enter the lanes of the new street in the same order: from the curb inwards for a right turn, from the centre line outwards for a left turn.
+local function nodeConnections(node : integer, streets : {integer}) : {LaneConnection}
+	local roles : {LaneRoles} = {}
+	local awayX : {number} = {}
+	local awayY : {number} = {}
+	for index, street in ipairs(streets) do
+		roles[index] = laneRoles(street, node)
+		awayX[index], awayY[index] = directionAway(street, node)
+	end
+	local connections : {LaneConnection} = {}
+	for fromIndex, from in ipairs(streets) do
+		local lanes = roles[fromIndex].incoming
+		local laneCount = #lanes
+		local kinds : {string} = {}
+		local hasStraight, hasLeft, hasRight = false, false, false
+		for toIndex = 1, #streets do
+			if toIndex ~= fromIndex and #roles[toIndex].outgoing > 0 then
+				local kind = #streets == 2 and MOVE_STRAIGHT or movementKind(awayX[fromIndex], awayY[fromIndex], awayX[toIndex], awayY[toIndex])
+				kinds[toIndex] = kind
+				hasStraight = hasStraight or kind == MOVE_STRAIGHT
+				hasLeft = hasLeft or kind == MOVE_LEFT
+				hasRight = hasRight or kind == MOVE_RIGHT
+			end
+		end
+		for position, lane in ipairs(lanes) do
+			local turnsRight : boolean
+			local turnsLeft : boolean
+			local rightLaneOnly = false
+			if hasStraight then
+				turnsRight, turnsLeft = hasRight and position == laneCount, hasLeft and position == 1
+				rightLaneOnly = turnsRight and laneCount > 1
+			else
+				local innerHalf = laneCount == 1 or position <= laneCount // 2
+				local outerHalf = laneCount == 1 or position > laneCount // 2
+				turnsRight, turnsLeft = hasRight and (not hasLeft or outerHalf), hasLeft and (not hasRight or innerHalf)
+			end
+			for toIndex = 1, #streets do
+				local kind = kinds[toIndex]
+				local toRoles = roles[toIndex]
+				local toLanes : {integer} = {}
+				if kind == MOVE_STRAIGHT and not rightLaneOnly then toLanes = lanesInto(toRoles, position, laneCount)
+				elseif kind == MOVE_RIGHT and turnsRight then toLanes = { toRoles.outgoing[math.max(#toRoles.outgoing - (laneCount - position), 1)] }
+				elseif kind == MOVE_LEFT and turnsLeft then toLanes = { toRoles.outgoing[math.min(position, #toRoles.outgoing)] } end
+				for _, toLane in ipairs(toLanes) do connections[#connections + 1] = newLaneConnection(from, lane, streets[toIndex], toLane) end
+			end
+		end
+	end
+	return connections
+end
+
+-- Writes the lane connections of one grid node in one command: every street into every other street. Returns "written", "failed", "refused" (the game takes no connection list) or "skipped" (fewer than two streets) to onFinished.
+local function writeNodeConnections(plan : Plan, alongIndex : integer, leftIndex : integer, onFinished : function(string))
+	local label = alongIndex .. ":" .. leftIndex
+	local node = gridPoint(plan, alongIndex, leftIndex).nodeId
+	local streets = node ~= nil and streetSegmentsAt(node) or {}
+	if #streets < 2 then
+		onFinished("skipped")
+		return
+	end
+	local connections = nodeConnections(node, streets)
+	local hasConfig = api.engine.getComponent(node, api.type.ComponentType.BASE_NODE_CONFIG) ~= nil
+	local entry = api.type.BaseNodeLaneConnectionAndEntity.new()
+	entry.entity = node
+	local message = ""
+	local accepted = xpcall(function()
+		entry.comp.laneConnections = connections
+		entry.comp.crosswalks = {}
+	end, function(problem : any) message = tostring(problem) end)
+	if not accepted then
+		print(LOG_TAG, "lane_connections", label, "refused", message)
+		onFinished("refused")
+		return
+	end
+	local proposal = api.type.SimpleProposal.new()
+	if hasConfig then proposal.streetProposal.nodeConfigsToRemove = { node } end
+	proposal.streetProposal.nodeConfigsToAdd = { entry }
+	api.cmd.sendCommand(api.cmd.makeWorldBuildProposalCmd(proposal, plan.context, false, true), function(data : WorldBuildProposalCommandData, written : boolean)
+		if not written then print(LOG_TAG, "lane_connections", label, "failed", errorMessages(data)) end
+		onFinished(written and "written" or "failed")
+	end)
+end
+
+-- Writes the lane connections of every grid node, one command each, and logs the counts.
+local function writeAllConnections(plan : Plan)
+	local nodes : {{integer}} = {}
+	for alongIndex = 0, plan.options.blocksAlong do
+		for leftIndex = 0, plan.options.blocksLeft do nodes[#nodes + 1] = { alongIndex, leftIndex } end
+	end
+	local counts : {string : integer} = { written = 0, failed = 0, refused = 0, skipped = 0 }
+	local function nodeAt(index : integer)
+		if index > #nodes then
+			print(LOG_TAG, "lane_connections", "written", counts.written, "failed", counts.failed, "refused", counts.refused, "skipped", counts.skipped)
+			print(LOG_TAG, "done", #plan.segments)
+			return
+		end
+		writeNodeConnections(plan, nodes[index][1], nodes[index][2], function(result : string)
+			counts[result] = counts[result] + 1
+			nodeAt(index + 1)
+		end)
+	end
+	nodeAt(1)
+end
+
+local function finishNodes(plan : Plan)
+	local mode = plan.options.laneConnections
+	if mode == LANES_OWN then
+		writeAllConnections(plan)
+		return
+	end
 	local corners : {{integer}} = {}
-	if stubs then corners = bendCorners(plan) end
+	if mode == LANES_STUB_REMOVE or mode == LANES_STUB_KEEP then corners = bendCorners(plan) end
 	local function cornerAt(index : integer)
 		if index > #corners then
 			print(LOG_TAG, "done", #plan.segments)
@@ -482,7 +671,7 @@ end
 local function buildBatch(plan : Plan, firstNumber : integer, attempt : integer)
 	local total = #plan.segments
 	if firstNumber > total then
-		finishBends(plan)
+		finishNodes(plan)
 		return
 	end
 	local perCommand = plan.options.edgesPerCommand
