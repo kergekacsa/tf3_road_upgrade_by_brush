@@ -825,4 +825,104 @@ local turnsFail = runTurns(1)
 support.check("left turns: a refused command is logged and counted", turnsFail.ok and turnsFail.out[#turnsFail.out]:find("turns_done nodes 4 changed 0 skipped 3 failed 1", 1, true) ~= nil
   and table.concat(turnsFail.out, "\n"):find("turns_failed 1 Collision", 1, true) ~= nil, table.concat(turnsFail.out, " | "))
 
+-- Small road speed. Edge 201/202 change (202 is unowned, a variant of country_old_small), 203 already has the speed, 204 and 207 are no small road,
+-- 205 belongs to another player, 206 is part of a construction, 208 would lose its edge object, 209 is a tram variant. Node 1 and node 2 share edge 201.
+local KMH_30_MS = 30 / 3.6
+local function speedLanes(ms) return { { speed = ms, forward = true }, { speed = ms, forward = false } } end
+local function runSpeed(keepSpeed, failCommand, entry)
+  local roads = {
+    [201] = { roadTemplate = "street/town/town_new_small.street_template.lua", laneConfigs = speedLanes(13.89), objects = {} },
+    [202] = { roadTemplate = "country_old_small_trees", laneConfigs = speedLanes(16.67), objects = {} },
+    [203] = { roadTemplate = "town_old_small", laneConfigs = speedLanes(KMH_30_MS), objects = {} },
+    [204] = { roadTemplate = "town_new_medium", laneConfigs = speedLanes(13.89), objects = {} },
+    [205] = { roadTemplate = "town_new_small", laneConfigs = speedLanes(13.89), objects = {} },
+    [206] = { roadTemplate = "town_new_small", laneConfigs = speedLanes(13.89), objects = {} },
+    [207] = { roadTemplate = "town_new_xsmall", laneConfigs = speedLanes(8.33), objects = {} },
+    [208] = { roadTemplate = "town_new_small", laneConfigs = speedLanes(13.89), objects = { { 900, 0 } } },
+    [209] = { roadTemplate = "town_new_small_tram_electrified", laneConfigs = speedLanes(13.89), objects = {} },
+  }
+  local streetsOf = { [1] = { 201, 202, 203, 204, 205 }, [2] = { 201, 206, 207, 208, 209 } }
+  local owners = { [205] = 99, [202] = -1 }
+  local queue, sent, out, replaced = {}, {}, {}, {}
+  local replaceFor = {}
+  _G.api = {
+    type = {
+      ComponentType = { BASE_EDGE = "BASE_EDGE", PLAYER_OWNED = "PLAYER_OWNED" },
+      Context = { new = function() return {} end },
+    },
+    engine = {
+      util = { getPlayer = function() return 42 end,
+        proposal = { replaceSegment = function(edge, template)
+          replaced[#replaced + 1] = edge .. "=" .. template
+          local lanes = {}
+          for i, lane in ipairs(roads[edge].laneConfigs) do lanes[i] = { speed = 13.89, forward = lane.forward } end
+          local proposal = { proposal = { addedSegments = { { comp = { laneConfigs = lanes, objects = edge == 208 and {} or roads[edge].objects } } } } }
+          replaceFor[proposal] = edge
+          return proposal
+        end } },
+      system = { streetSystem = { getNode2StreetEdgeMap = function() return streetsOf end },
+        streetConnectorSystem = { getConstructionEntityForEdge = function(edge) return edge == 206 and 500 or -1 end } },
+      getComponent = function(entity, component)
+        if component == "BASE_EDGE" then return roads[entity] end
+        if component == "PLAYER_OWNED" then
+          if owners[entity] == nil then return { player = 42 } end
+          return owners[entity] >= 0 and { player = owners[entity] } or nil
+        end
+      end,
+    },
+    cmd = {
+      makeWorldBuildProposalCmd = function(proposal, context, ignoreErrors, playerInitiated) return { proposal = proposal, context = context, ignoreErrors = ignoreErrors, playerInitiated = playerInitiated } end,
+      sendCommand = function(cmd, callback) queue[#queue + 1] = { cmd = cmd, callback = callback } end,
+    },
+  }
+  local realPrint = print
+  _G.print = function(...) out[#out + 1] = table.concat({ ... }, " ") end
+  local ok, err = pcall(entry or gridBuilder.setSmallRoadSpeed)
+  local sequential = true
+  while ok and #queue > 0 do
+    sequential = sequential and #queue == 1
+    local item = table.remove(queue, 1)
+    sent[#sent + 1] = item.cmd
+    if #sent == failCommand then
+      item.callback({ resultProposalData = { errorState = { messages = { "Collision" } } } }, false)
+    else
+      if keepSpeed then
+        local edge = replaceFor[item.cmd.proposal]
+        roads[edge].laneConfigs = item.cmd.proposal.proposal.addedSegments[1].comp.laneConfigs
+      end
+      item.callback({}, true)
+    end
+  end
+  _G.print = realPrint
+  return { ok = ok, err = err, sent = sent, out = out, sequential = sequential, replaced = replaced, replaceFor = replaceFor }
+end
+
+local speed = runSpeed(true)
+support.check("small road speed: one command per road that needs it, each sent after the previous one finished",
+  speed.ok and #speed.sent == 3 and speed.sequential and table.concat(speed.replaced, " ") == "201=street/town/town_new_small.street_template.lua 202=country_old_small_trees 208=town_new_small 209=town_new_small_tram_electrified",
+  speed.err or table.concat(speed.replaced, " "))
+local firstLanes = speed.sent[1] and speed.sent[1].proposal.proposal.addedSegments[1].comp.laneConfigs or {}
+support.check("small road speed: every lane of the new segment gets 30 km/h in m/s, the command is player initiated with the player in its context",
+  #firstLanes == 2 and near(firstLanes[1].speed, KMH_30_MS) and near(firstLanes[2].speed, KMH_30_MS)
+  and speed.sent[1].playerInitiated == true and speed.sent[1].ignoreErrors == false and speed.sent[1].context.player == 42)
+support.check("small road speed: the start line counts the small roads and the roads to change",
+  speed.out[1]:find("speed_start kmh 30 ms 8.33 small_roads 5 to_change 4", 1, true) ~= nil, speed.out[1])
+support.check("small road speed: a road whose new segment loses its edge object is skipped and logged",
+  table.concat(speed.out, "\n"):find("speed_skipped 208 objects_lost", 1, true) ~= nil, table.concat(speed.out, " | "))
+support.check("small road speed: the run ends with the counts and a check that finds only the skipped road at another speed",
+  speed.out[#speed.out - 1]:find("speed_done roads 4 changed 3 skipped 1 failed 0", 1, true) ~= nil
+  and speed.out[#speed.out]:find("speed_check small_roads 5 other_speed 1", 1, true) ~= nil, table.concat(speed.out, " | "))
+local dropped = runSpeed(false)
+support.check("small road speed: a game that does not keep the speed shows in the check line",
+  dropped.out[#dropped.out]:find("speed_check small_roads 5 other_speed 4", 1, true) ~= nil, dropped.out[#dropped.out])
+local speedFail = runSpeed(true, 2)
+support.check("small road speed: a refused command is logged with the game message and the run goes on",
+  speedFail.ok and table.concat(speedFail.out, "\n"):find("speed_failed 202 Collision", 1, true) ~= nil
+  and speedFail.out[#speedFail.out - 1]:find("speed_done roads 4 changed 2 skipped 1 failed 1", 1, true) ~= nil, table.concat(speedFail.out, " | "))
+local fastRoad = runSpeed(true, nil, function() gridBuilder.setSmallRoadSpeed(50) end)
+support.check("small road speed: the kmh argument sets the speed",
+  fastRoad.out[1]:find("speed_start kmh 50 ms 13.89 small_roads 5 to_change 5", 1, true) ~= nil, fastRoad.out[1])
+local badSpeed = runSpeed(true, nil, function() gridBuilder.setSmallRoadSpeed(0) end)
+support.check("small road speed: a speed of 0 raises an error and sends nothing", not badSpeed.ok and #badSpeed.sent == 0 and tostring(badSpeed.err):find("kmh_must_be_positive", 1, true) ~= nil, badSpeed.err)
+
 support.finish("grid_builder_test")

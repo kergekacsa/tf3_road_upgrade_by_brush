@@ -106,6 +106,18 @@ The same module has three more console functions, `removeLights()`, `removeLeftT
 - **Output:** every line starts with the tag `[BrushUpgrade] [grid]`. A run ends with `lights_done` or `turns_done` and the numbers `nodes N changed C skipped S failed F`. A refused node gives a `lights_failed` or `turns_failed` line with the game message. A skipped junction gives `turns_skipped N <reason>` with the reason `has_traffic_light`, `no_config`, `lane_mismatch`, `unchanged`, or `config_copy_failed`. A changed junction gives `turns_node N kept K of T`.
 - **Limit:** `grid_builder_test.lua` proves the filter, the rules, and the commands against a stub of the game. The first run in the game decides whether it accepts the proposals and whether the lane position reading is right.
 
+### Small road speed
+
+The same module has the console function `setSmallRoadSpeed(kmh)`. It works on the whole map and changes it at once. The game has no undo for it. Save the game first. The research behind it is `docs/research/road-speed-limits.md`.
+
+- **Call:** define the module as in the previous section, then call `grid.setSmallRoadSpeed()` for 30 km/h, or `grid.setSmallRoadSpeed(40)`. A speed of 0 or less raises an error and sends nothing.
+- **Roads:** the town and country small roads of both eras, with their variants (trees, barriers, bus, tram), that belong to the player or to nobody and are not part of a construction. The medium and large roads and `town_new_xsmall` stay as they are. Industry access roads are not detected and change like any other small road.
+- **Command:** one command per road, each sent in the callback of the previous one. The command is `replaceSegment` with the template the road already has, with every lane of the new segment set to the speed. The mod writes the value in m/s (`kmh / 3.6`) and reads it back from the proposal. A road that already has the speed in every lane is left alone, so a second call changes nothing. A road whose new segment would lose an edge object (a signal or a stop) is skipped.
+- **Cost:** each replacement is a player-initiated command, so the game may charge the player for each road.
+- **Output:** every line starts with the tag `[BrushUpgrade] [grid]`. The run starts with `speed_start` (speed in km/h and m/s, number of small roads, number to change). A refused road gives `speed_failed <road> <message>`. A skipped road gives `speed_skipped <road> <reason>` with the reason `gone`, `replace_segment_failed`, `speed_not_kept`, `no_new_segment`, or `objects_lost`. The run ends with `speed_done roads N changed C skipped S failed F` and `speed_check small_roads T other_speed D`.
+- **Reading `speed_check`:** the line counts the small roads whose lanes still have another speed after the last command. A value above the number of skipped and failed roads means the game replaced the road but did not keep the written speed. That settles the main open question of the research file. Vehicle speed on the road, the save, and the removal of the mod are not covered: the open questions 2, 4, and 6 of that file still need their game tests.
+- **Limit:** `grid_builder_test.lua` proves the road filter, the edit, and the commands against a stub of the game. It does not prove that the game accepts the proposals.
+
 ## Other checks in the same flow
 
 - **Strings:** run `node build.js --check` in `C:\Users\Kacsa\tools\strings-gen`. It verifies every text of the mod against the 13 languages.

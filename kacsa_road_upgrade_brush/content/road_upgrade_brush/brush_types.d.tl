@@ -203,4 +203,6 @@ global record RubGridBuilderModule
 	removeLeftTurns : function()
 	--- Runs removeLights, then removeLeftTurns after the last light command finished.
 	removeLightsAndLeftTurns : function()
+	--- Replaces every small road (town or country, new or old, with its variants) that belongs to the player or to nobody, outside constructions, with its own template and sets every lane to `kmh` (default 30), one command per road. A road that already has the speed, or whose new segment would lose edge objects, is not replaced. Logs speed_start, the counts at the end, and speed_check with the number of small roads that still have another speed.
+	setSmallRoadSpeed : function(kmh : number)
 end

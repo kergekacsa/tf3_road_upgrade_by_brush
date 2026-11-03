@@ -40,6 +40,10 @@ local FIT_TOLERANCE <const> = 1e-9
 local STUB_REMOVE <const> = "remove"
 local STUB_KEEP <const> = "keep"
 local STUB_OFF <const> = "off"
+local KMH_PER_MS <const> = 3.6
+local DEFAULT_SMALL_ROAD_KMH <const> = 30
+local SPEED_TOLERANCE_MS <const> = 0.001
+local SMALL_ROAD_BASES : {string} = { "town_new_small", "town_old_small", "country_new_small", "country_old_small" }
 
 local record Frame
 	originX : number
@@ -617,8 +621,8 @@ local function nodesWhere(accepts : function(node : integer, streets : {integer}
 	return nodes
 end
 
--- One command per node, each sent in the callback of the previous one. makeCommand returns nil and a reason for a node that needs no command. onDone, when given, runs after the last command finished and the end line is logged.
-local function sendPerNode(tag : string, nodes : {integer}, makeCommand : function(node : integer) : Command<WorldBuildProposalCommandData>, string, onDone : function())
+-- One command per entity, each sent in the callback of the previous one. makeCommand returns nil and a reason for an entity that needs no command. onDone, when given, runs after the last command finished and the end line is logged. `countName` names the entities in the end line.
+local function sendPerNode(tag : string, nodes : {integer}, makeCommand : function(node : integer) : Command<WorldBuildProposalCommandData>, string, onDone : function(), countName? : string)
 	local changed, skipped, failed = 0, 0, 0
 	local function sendFrom(index : integer)
 		while index <= #nodes do
@@ -640,7 +644,7 @@ local function sendPerNode(tag : string, nodes : {integer}, makeCommand : functi
 			print(LOG_TAG, tag .. "_skipped", node, reason)
 			index = index + 1
 		end
-		print(LOG_TAG, tag .. "_done", "nodes", #nodes, "changed", changed, "skipped", skipped, "failed", failed)
+		print(LOG_TAG, tag .. "_done", countName or "nodes", #nodes, "changed", changed, "skipped", skipped, "failed", failed)
 		if onDone ~= nil then onDone() end
 	end
 	sendFrom(1)
@@ -787,6 +791,102 @@ local function startRemoveLeftTurns(onDone : function())
 		proposal.streetProposal.nodeConfigsToAdd = { entry }
 		return api.cmd.makeWorldBuildProposalCmd(proposal, context, false, true), nil
 	end, onDone)
+end
+
+-- A small road template of the four base names or one of their variants (trees, barriers, bus, tram).
+local function isSmallRoadTemplate(template : string) : boolean
+	if template == nil then return false end
+	local name = templates.baseName(template)
+	for _, base in ipairs(SMALL_ROAD_BASES) do
+		if name == base or string.sub(name, 1, #base + 1) == base .. "_" then return true end
+	end
+	return false
+end
+
+local function hasOtherLaneSpeed(lanes : {LaneConfig}, speed : number) : boolean
+	for _, lane in ipairs(lanes) do
+		if math.abs(lane.speed - speed) > SPEED_TOLERANCE_MS then return true end
+	end
+	return false
+end
+
+-- The small roads of the player or of nobody that no construction owns, sorted. Returns the ones with a lane at another speed than `speed` and the number of all of them.
+local function smallRoadsNotAt(speed : number) : {integer}, integer
+	local player = api.engine.util.getPlayer()
+	local seen : {integer : boolean} = {}
+	local different : {integer} = {}
+	local total = 0
+	for _, streets in pairs(api.engine.system.streetSystem.getNode2StreetEdgeMap()) do
+		for _, street in ipairs(streets) do
+			if not seen[street] then
+				seen[street] = true
+				local edge = api.engine.getComponent(street, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+				local owner = api.engine.getComponent(street, api.type.ComponentType.PLAYER_OWNED) as Engine.Component.PlayerOwned
+				local okC, construction = pcall(api.engine.system.streetConnectorSystem.getConstructionEntityForEdge, street)
+				local foreign = owner ~= nil and owner.player ~= nil and owner.player >= 0 and owner.player ~= player
+				local inConstruction = not okC or (construction ~= nil and construction >= 0)
+				if edge ~= nil and isSmallRoadTemplate(edge.roadTemplate) and not foreign and not inConstruction then
+					total = total + 1
+					if hasOtherLaneSpeed(edge.laneConfigs, speed) then different[#different + 1] = street end
+				end
+			end
+		end
+	end
+	table.sort(different)
+	return different, total
+end
+
+-- The proposal that replaces the road with its own template, every lane of the new segment at `speed`. The getters may hand out copies, so the edit is written back at every level and read back. nil and a reason when the new segment would lose edge objects (signals, stops) or does not keep the speed.
+local function speedProposal(road : integer, edge : Engine.Component.BaseEdge, speed : number) : Proposal, string
+	local ok, proposal = pcall(api.engine.util.proposal.replaceSegment, road, edge.roadTemplate)
+	if not ok or proposal == nil then return nil, "replace_segment_failed " .. tostring(proposal) end
+	local street = proposal.proposal
+	local segments = street.addedSegments
+	for _, segment in ipairs(segments) do
+		local comp = segment.comp
+		local lanes = comp.laneConfigs
+		for i, lane in ipairs(lanes) do
+			lane.speed = speed
+			lanes[i] = lane
+		end
+		comp.laneConfigs = lanes
+		segment.comp = comp
+	end
+	street.addedSegments = segments
+	proposal.proposal = street
+	local readBack = proposal.proposal.addedSegments
+	if #readBack == 0 then return nil, "no_new_segment" end
+	for _, segment in ipairs(readBack) do
+		if hasOtherLaneSpeed(segment.comp.laneConfigs, speed) then return nil, "speed_not_kept" end
+	end
+	if #(readBack[1].comp.objects or {}) < #(edge.objects or {}) then return nil, "objects_lost" end
+	return proposal, nil
+end
+
+-- Sets the speed of every lane of every small road, one replacement command per road. The end line `speed_check` counts the small roads that still have another speed: a count above 0 after a run without failed commands means the game did not keep the speed.
+local function startSetSmallRoadSpeed(kmh : number, onDone : function())
+	local speed = kmh / KMH_PER_MS
+	local context = api.type.Context.new()
+	context.player = api.engine.util.getPlayer()
+	local roads, total = smallRoadsNotAt(speed)
+	print(LOG_TAG, "speed_start", "kmh", kmh, "ms", rounded(speed), "small_roads", total, "to_change", #roads)
+	sendPerNode("speed", roads, function(road : integer) : Command<WorldBuildProposalCommandData>, string
+		local edge = api.engine.getComponent(road, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+		if edge == nil then return nil, "gone" end
+		local proposal, reason = speedProposal(road, edge, speed)
+		if proposal == nil then return nil, reason end
+		return api.cmd.makeWorldBuildProposalCmd(proposal, context, false, true), nil
+	end, function()
+		local remaining, count = smallRoadsNotAt(speed)
+		print(LOG_TAG, "speed_check", "small_roads", count, "other_speed", #remaining)
+		if onDone ~= nil then onDone() end
+	end, "roads")
+end
+
+function gridBuilder.setSmallRoadSpeed(kmh? : number)
+	local wanted = kmh or DEFAULT_SMALL_ROAD_KMH
+	if wanted <= 0 then error("kmh_must_be_positive") end
+	startSetSmallRoadSpeed(wanted, nil)
 end
 
 function gridBuilder.removeLights()
