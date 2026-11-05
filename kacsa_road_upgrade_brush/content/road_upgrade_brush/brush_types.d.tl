@@ -201,6 +201,8 @@ global record RubGridBuilderModule
 	removeLights : function()
 	--- Rewrites the lane connections of every major-minor junction of the player that has no traffic light: no left turns, straight only between lanes of one kind (bus or normal), right turns only from the outer lane to the outer lane of one kind. U-turns stay. Logs the counts of changed, skipped and failed nodes at the end.
 	removeLeftTurns : function()
+	--- Adds a crosswalk on every street of every junction of the player (3 or more streets) where at least one street is a town street, which is no country road and has a sidewalk. A junction of only country roads and highways gets none. A crosswalk that exists stays. One command per junction. Logs the counts of changed, skipped and failed nodes at the end.
+	addCrosswalks : function()
 	--- Runs removeLights, then removeLeftTurns after the last light command finished.
 	removeLightsAndLeftTurns : function()
 	--- Replaces every small road (town or country, new or old, with its variants) that belongs to the player or to nobody, outside constructions, with its own template and sets every lane to `kmh` (default 30), one command per road. A road that already has the speed, or whose new segment would lose edge objects, is not replaced. Logs speed_start, the counts at the end, and speed_check with the number of small roads that still have another speed.

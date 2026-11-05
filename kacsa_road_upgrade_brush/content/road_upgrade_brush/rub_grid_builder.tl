@@ -28,6 +28,7 @@ local SEGMENT_TYPE_STREET <const> = 0
 local ROUNDING_STEPS <const> = 100
 local STUB_LENGTH_M <const> = 30
 local MIN_DIRECTION_LENGTH <const> = 0.001
+local MIN_STREETS_FOR_CROSSWALKS <const> = 3
 local MIN_STREETS_AT_JUNCTION <const> = 3
 local STRAIGHT_LIMIT_RAD <const> = math.pi / 4
 local TURN_U <const> = "u"
@@ -596,7 +597,24 @@ local function nodeConnections(node : integer, streets : {integer}) : {LaneConne
 	return connections
 end
 
--- Writes the lane connections of one grid node in one command: every street into every other street. Returns "written", "failed", "refused" (the game takes no connection list) or "skipped" (fewer than two streets) to onFinished.
+local function templateOf(street : integer) : StreetTemplate
+	local edge = api.engine.getComponent(street, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+	return api.res.streetTemplateRep.get(api.res.streetTemplateRep.find(edge.roadTemplate))
+end
+
+-- The crosswalks of a node: the entities of its config, or when the config has none and three or more streets meet there, one street segment for every street whose template has crosswalks by default. A crosswalk entity is the segment of the street that the crosswalk crosses.
+local function nodeCrosswalks(node : integer, streets : {integer}) : {integer}
+	local config = api.engine.getComponent(node, api.type.ComponentType.BASE_NODE_CONFIG) as Engine.Component.BaseNodeConfig
+	local crosswalks : {integer} = {}
+	for _, crosswalk in ipairs(config ~= nil and config.crosswalks or {}) do crosswalks[#crosswalks + 1] = crosswalk end
+	if #crosswalks > 0 or #streets < MIN_STREETS_FOR_CROSSWALKS then return crosswalks end
+	for _, street in ipairs(streets) do
+		if templateOf(street).defaultWithCrosswalk then crosswalks[#crosswalks + 1] = street end
+	end
+	return crosswalks
+end
+
+-- Writes the lane connections of one grid node in one command: every street into every other street. The crosswalks of the node stay. Returns "written", "failed", "refused" (the game takes no connection list) or "skipped" (fewer than two streets) to onFinished.
 local function writeNodeConnections(plan : Plan, alongIndex : integer, leftIndex : integer, onFinished : function(string))
 	local label = alongIndex .. ":" .. leftIndex
 	local node = gridPoint(plan, alongIndex, leftIndex).nodeId
@@ -612,7 +630,7 @@ local function writeNodeConnections(plan : Plan, alongIndex : integer, leftIndex
 	local message = ""
 	local accepted = xpcall(function()
 		entry.comp.laneConnections = connections
-		entry.comp.crosswalks = {}
+		entry.comp.crosswalks = nodeCrosswalks(node, streets)
 	end, function(problem : any) message = tostring(problem) end)
 	if not accepted then
 		print(LOG_TAG, "lane_connections", label, "refused", message)
@@ -779,13 +797,21 @@ local function lanesPerDirection(street : integer) : integer
 	return math.max(forward, backward)
 end
 
--- A junction of at least 3 streets that joins a street with several lanes per direction to a street with one, and has no street of another player.
-local function isMajorMinorJunction(streets : {integer}, player : integer) : boolean
+-- A junction of at least 3 streets with no street of another player.
+local function isOwnJunction(streets : {integer}, player : integer) : boolean
 	if #streets < MIN_STREETS_AT_JUNCTION then return false end
-	local hasMajor, hasMinor = false, false
 	for _, street in ipairs(streets) do
 		local owner = api.engine.getComponent(street, api.type.ComponentType.PLAYER_OWNED) as Engine.Component.PlayerOwned
 		if owner ~= nil and owner.player ~= player then return false end
+	end
+	return true
+end
+
+-- An own junction that joins a street with several lanes per direction to a street with one.
+local function isMajorMinorJunction(streets : {integer}, player : integer) : boolean
+	if not isOwnJunction(streets, player) then return false end
+	local hasMajor, hasMinor = false, false
+	for _, street in ipairs(streets) do
 		local lanes = lanesPerDirection(street)
 		if lanes > 1 then hasMajor = true elseif lanes == 1 then hasMinor = true end
 	end
@@ -982,6 +1008,72 @@ local function startRemoveLeftTurns(onDone : function())
 	end, onDone)
 end
 
+local function hasSidewalk(street : integer) : boolean
+	local edge = api.engine.getComponent(street, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
+	for _, lane in ipairs(edge.laneConfigs) do
+		if lane.transportModes[api.type.enum.TransportMode.PERSON] then return true end
+	end
+	return false
+end
+
+-- A town street is no country road and has a sidewalk (highways and ramps have none).
+local function isTownStreet(street : integer) : boolean
+	return not templateOf(street).country and hasSidewalk(street)
+end
+
+local function hasTownStreet(streets : {integer}) : boolean
+	for _, street in ipairs(streets) do
+		if isTownStreet(street) then return true end
+	end
+	return false
+end
+
+-- A copy of the node config with a crosswalk on every street of the junction, when at least one of its streets is a town street. Returns nil and a reason when the node stays as it is, else the entry and the text "N added".
+local function crosswalkConfig(node : integer, streets : {integer}) : Proposal.BaseNodeLaneConnectionAndEntity, string
+	local config = api.engine.getComponent(node, api.type.ComponentType.BASE_NODE_CONFIG) as Engine.Component.BaseNodeConfig
+	if config == nil then return nil, "no_config" end
+	if not hasTownStreet(streets) then return nil, "no_town_street" end
+	local crosswalks : {integer} = {}
+	local present : {integer : boolean} = {}
+	for _, crosswalk in ipairs(config.crosswalks or {}) do
+		crosswalks[#crosswalks + 1] = crosswalk
+		present[crosswalk] = true
+	end
+	local added = 0
+	for _, street in ipairs(streets) do
+		if not present[street] then
+			crosswalks[#crosswalks + 1] = street
+			added = added + 1
+		end
+	end
+	if added == 0 then return nil, "unchanged" end
+	local entry = api.type.BaseNodeLaneConnectionAndEntity.new()
+	entry.entity = node
+	local message = ""
+	local copied = xpcall(function()
+		entry.comp = config
+		entry.comp.crosswalks = crosswalks
+	end, function(problem : any) message = tostring(problem) end)
+	if not copied then return nil, "config_copy_failed " .. message end
+	return entry, added .. " added"
+end
+
+-- Adds the missing crosswalks to every junction of the player, one command per junction.
+local function startAddCrosswalks(onDone : function())
+	local context = api.type.Context.new()
+	context.player = api.engine.util.getPlayer()
+	local nodes = nodesWhere(function(_node : integer, streets : {integer}, player : integer) : boolean return isOwnJunction(streets, player) end)
+	sendPerNode("crosswalks", nodes, function(node : integer) : Command<WorldBuildProposalCommandData>, string
+		local entry, detail = crosswalkConfig(node, streetSegmentsAt(node))
+		if entry == nil then return nil, detail end
+		print(LOG_TAG, "crosswalks_node", node, detail)
+		local proposal = api.type.SimpleProposal.new()
+		proposal.streetProposal.nodeConfigsToRemove = { node }
+		proposal.streetProposal.nodeConfigsToAdd = { entry }
+		return api.cmd.makeWorldBuildProposalCmd(proposal, context, false, true), nil
+	end, onDone)
+end
+
 -- A small road template of the four base names or one of their variants (trees, barriers, bus, tram).
 local function isSmallRoadTemplate(template : string) : boolean
 	if template == nil then return false end
@@ -1084,6 +1176,10 @@ end
 
 function gridBuilder.removeLeftTurns()
 	startRemoveLeftTurns(nil)
+end
+
+function gridBuilder.addCrosswalks()
+	startAddCrosswalks(nil)
 end
 
 -- Runs removeLights, then removeLeftTurns after the last light command finished.

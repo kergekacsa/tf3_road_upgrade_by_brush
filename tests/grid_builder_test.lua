@@ -51,6 +51,8 @@ local function near(a, b) return math.abs(a - b) < 1e-6 end
 local connectionDelayTicks = 0
 -- While true, a node config refuses a list of lane connections.
 local refuseLaneLists = false
+-- While true, a node with three or more streets has no crosswalk in its config.
+local nodesWithoutCrosswalks = false
 local function runWorld(p0, p1, options, failAt, year, invalidateStripAfter, replaceCornerAfter)
   local ownerView = { player = OWNER_PLAYER }
   local world = { nodes = { [10] = { position = p0 }, [11] = { position = p1 } }, edges = {}, applied = {}, queue = {}, next = FIRST_NEW_ID }
@@ -94,7 +96,7 @@ local function runWorld(p0, p1, options, failAt, year, invalidateStripAfter, rep
       end,
       get = function(id)
         local name = TEMPLATE_NAMES[id]
-        local template = { streetStyle = "style_of_" .. name, laneConfigs = laneLayout("lanes_of_" .. name, (name == LARGE_NEW or name == LARGE_OLD) and 3 or 1), defaultEdgeDecorations = { { "deco_of_" .. name, true } } }
+        local template = { defaultWithCrosswalk = not name:find("country", 1, true), streetStyle = "style_of_" .. name, laneConfigs = laneLayout("lanes_of_" .. name, (name == LARGE_NEW or name == LARGE_OLD) and 3 or 1), defaultEdgeDecorations = { { "deco_of_" .. name, true } } }
         if name == LARGE_NEW then template.availability = { yearFrom = 1950, yearTo = 0 } end
         if name == LARGE_OLD then template.availability = { yearFrom = 0, yearTo = 1950 } end
         return template
@@ -130,7 +132,7 @@ local function runWorld(p0, p1, options, failAt, year, invalidateStripAfter, rep
         if component == "BASE_EDGE" then return edges[entity] end
         if component == "PLAYER_OWNED" then return entity == 7 and ownerView or nil end
         if component == "BASE_NODE_CONFIG" then
-          if writtenConfigs[entity] then return { laneConnections = writtenConfigs[entity].lanes, crosswalks = { 501 } } end
+          if writtenConfigs[entity] then return { laneConnections = writtenConfigs[entity].lanes, crosswalks = nodesWithoutCrosswalks and {} or { 501 } } end
           local streets = {}
           for id, edge in pairs(edges) do
             if edge.node0 == entity or edge.node1 == entity then streets[#streets + 1] = id end
@@ -147,7 +149,7 @@ local function runWorld(p0, p1, options, failAt, year, invalidateStripAfter, rep
               if from ~= to then lanes[#lanes + 1] = { segment0 = from, lane0 = 0, segment1 = to, lane1 = 0, withRoad = true, withTram = false } end
             end
           end
-          return { laneConnections = lanes, crosswalks = { 501 } }
+          return { laneConnections = lanes, crosswalks = nodesWithoutCrosswalks and {} or { 501 } }
         end
         return world.nodes[entity]
       end,
@@ -641,6 +643,16 @@ end
 support.check("own: a corner of two large streets gets the 6 mirrored lane pairs 3 to 4, 2 to 5, 1 to 6, in both directions", cornersOk, cornersDetail)
 local inner = writeOf(own, 1, 1).rewrittenConfigs[1]
 support.check("own: a crossing of four one-lane streets gets 12 connections, each street into the 3 others", #inner.lanes == 12, #inner.lanes)
+support.check("own: a node that already has a crosswalk keeps it", #inner.crosswalks == 1 and inner.crosswalks[1] == 501, #inner.crosswalks)
+nodesWithoutCrosswalks = true
+local ownBare = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "own" })
+nodesWithoutCrosswalks = false
+local bareInner = writeOf(ownBare, 1, 1).rewrittenConfigs[1]
+local bareCorner = writeOf(ownBare, 6, 8).rewrittenConfigs[1]
+local crosswalkSegments = true
+for _, segment in ipairs(bareInner.crosswalks) do crosswalkSegments = crosswalkSegments and segment >= FIRST_EDGE_ID end
+support.check("own: a crossing of four streets without crosswalks gets one on each street, a bend of two streets gets none",
+  #bareInner.crosswalks == 4 and crosswalkSegments and #bareCorner.crosswalks == 0, #bareInner.crosswalks .. "/" .. #bareCorner.crosswalks)
 local ownText = table.concat(own.out, "\n")
 support.check("own: the log gives the counts and the run ends with done", ownText:find("lane_connections written 63 failed 0 refused 0 skipped 0", 1, true) ~= nil and own.out[#own.out]:find("done 110", 1, true) ~= nil)
 local ownFails = runWorld(vec(100, 200, 0), vec(180, 200, 0), { laneConnections = "own" }, GRID_EDGES + 1)
@@ -963,6 +975,99 @@ support.check("lights and left turns: lights_done comes before the first turns l
 local turnsFail = runTurns(1)
 support.check("left turns: a refused command is logged and counted", turnsFail.ok and turnsFail.out[#turnsFail.out]:find("turns_done nodes 4 changed 0 skipped 3 failed 1", 1, true) ~= nil
   and table.concat(turnsFail.out, "\n"):find("turns_failed 1 Collision", 1, true) ~= nil, table.concat(turnsFail.out, " | "))
+
+-- Add crosswalks. Node 1: two town streets and a country road. Node 2: two town streets and a highway without a sidewalk. Node 3: every crosswalk exists.
+-- Node 4: one of three crosswalks exists. Node 5: no node config. Node 6: a street of another player. Node 7: a bend of two streets.
+-- Node 8: two country roads and a highway.
+local function runCrosswalks(failCommand)
+  local walk = { transportModes = { [PERSON] = true } }
+  local road = { transportModes = { [CAR] = true }, forward = true }
+  local function edge(template, sidewalk) return { roadTemplate = template, laneConfigs = sidewalk and { walk, road } or { road } } end
+  local edges = {}
+  local streetsOf = {}
+  for node = 1, 8 do
+    streetsOf[node] = { node * 10 + 1, node * 10 + 2, node * 10 + 3 }
+    for _, street in ipairs(streetsOf[node]) do edges[street] = edge("town_new_small", true) end
+  end
+  streetsOf[7] = { 71, 72 }
+  edges[13] = edge("country_new_small", true)
+  edges[22] = edge("highway", false)
+  edges[81] = edge("country_new_small", false)
+  edges[82] = edge("highway", false)
+  edges[83] = edge("country_new_small", false)
+  local configs = { [1] = {}, [2] = {}, [3] = { 31, 32, 33 }, [4] = { 41 }, [6] = {}, [7] = {}, [8] = {} }
+  local queue, sent, out = {}, {}, {}
+  _G.api = {
+    type = {
+      ComponentType = { BASE_EDGE = "BASE_EDGE", PLAYER_OWNED = "PLAYER_OWNED", BASE_NODE_CONFIG = "BASE_NODE_CONFIG" },
+      enum = { TransportMode = { PERSON = PERSON, CAR = CAR } },
+      BaseNodeLaneConnectionAndEntity = { new = function() return { comp = {} } end },
+      SimpleProposal = { new = function() return { streetProposal = {} } end },
+      Context = { new = function() return {} end },
+    },
+    res = { streetTemplateRep = {
+      find = function(name) return name end,
+      get = function(name) return { country = name:find("country", 1, true) ~= nil } end,
+    } },
+    engine = {
+      util = { getPlayer = function() return 42 end },
+      system = { streetSystem = { getNode2StreetEdgeMap = function() return streetsOf end, getNodeStreetSegments = function(node) return streetsOf[node] end } },
+      getComponent = function(entity, component)
+        if component == "BASE_EDGE" then return edges[entity] end
+        if component == "PLAYER_OWNED" then return { player = entity == 61 and 99 or 42 } end
+        if component == "BASE_NODE_CONFIG" then
+          if configs[entity] == nil then return nil end
+          return { laneConnections = {}, crosswalks = configs[entity] }
+        end
+      end,
+    },
+    cmd = {
+      makeWorldBuildProposalCmd = function(proposal, context, ignoreErrors, playerInitiated) return { proposal = proposal, context = context, ignoreErrors = ignoreErrors, playerInitiated = playerInitiated } end,
+      sendCommand = function(cmd, callback) queue[#queue + 1] = { cmd = cmd, callback = callback } end,
+    },
+  }
+  local realPrint = print
+  _G.print = function(...) out[#out + 1] = table.concat({ ... }, " ") end
+  local ok, err = pcall(gridBuilder.addCrosswalks)
+  local sequential = true
+  while ok and #queue > 0 do
+    sequential = sequential and #queue == 1
+    local item = table.remove(queue, 1)
+    sent[#sent + 1] = item.cmd
+    if #sent == failCommand then
+      item.callback({ resultProposalData = { errorState = { messages = { "Collision" } } } }, false)
+    else
+      item.callback({}, true)
+    end
+  end
+  _G.print = realPrint
+  return { ok = ok, err = err, sent = sent, out = out, sequential = sequential }
+end
+
+do
+local walks = runCrosswalks()
+local function crosswalksOf(command)
+  local entry = command.proposal.streetProposal.nodeConfigsToAdd[1]
+  return entry.entity, table.concat(entry.comp.crosswalks, ",")
+end
+local walksText = table.concat(walks.out, "\n")
+local firstNode, firstList = crosswalksOf(walks.sent[1])
+local secondNode, secondList = crosswalksOf(walks.sent[2])
+local thirdNode, thirdList = crosswalksOf(walks.sent[3])
+support.check("crosswalks: a junction with a town street gets a crosswalk on every street, also on the country road and the highway, and a crosswalk that exists stays",
+  walks.ok and #walks.sent == 3 and walks.sequential and firstNode == 1 and firstList == "11,12,13" and secondNode == 2 and secondList == "21,22,23"
+  and thirdNode == 4 and thirdList == "41,42,43", walks.err or (firstList .. " | " .. secondList .. " | " .. thirdList))
+support.check("crosswalks: a junction with every crosswalk, a node without config, a junction of country roads and highways, a foreign junction and a bend get no command",
+  walksText:find("crosswalks_skipped 3 unchanged", 1, true) ~= nil and walksText:find("crosswalks_skipped 5 no_config", 1, true) ~= nil
+  and walksText:find("crosswalks_skipped 8 no_town_street", 1, true) ~= nil
+  and walksText:find("crosswalks_node 6", 1, true) == nil and walksText:find("crosswalks_node 7", 1, true) == nil, walksText)
+support.check("crosswalks: the command rewrites the node config as the player and the run ends with the counts",
+  walks.sent[1].proposal.streetProposal.nodeConfigsToRemove[1] == 1 and walks.sent[1].playerInitiated == true and walks.sent[1].ignoreErrors == false and walks.sent[1].context.player == 42
+  and walks.out[#walks.out]:find("crosswalks_done nodes 6 changed 3 skipped 3 failed 0", 1, true) ~= nil, walks.out[#walks.out])
+local walksFail = runCrosswalks(1)
+support.check("crosswalks: a refused command is logged and counted", walksFail.ok and walksFail.out[#walksFail.out]:find("crosswalks_done nodes 6 changed 2 skipped 3 failed 1", 1, true) ~= nil
+  and table.concat(walksFail.out, "\n"):find("crosswalks_failed 1 Collision", 1, true) ~= nil, table.concat(walksFail.out, " | "))
+end
 
 -- Small road speed. Edge 201/202 change (202 is unowned, a variant of country_old_small), 203 already has the speed, 204 and 207 are no small road,
 -- 205 belongs to another player, 206 is part of a construction, 208 would lose its edge object, 209 is a tram variant. Node 1 and node 2 share edge 201.
