@@ -1,0 +1,50 @@
+Town Zoning (stombor_zoning, mod.io 6451027, revision 5): adds the event stombor_zoning.resetGuards.
+The event clears the stored town demand (s.guards), so the next pass stores the current capacities as the new originals.
+Apply from C:\Users\Public\mod.io\10640\mods\6451027\content\game_mechanics\stombor_zoning\ with: patch -p1 < town-zoning-reset-guards.diff
+Console line: api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd("stombor_zoning", "stombor_zoning", "stombor_zoning.resetGuards", {}))
+
+--- a/zoning.script.lua
++++ b/zoning.script.lua
+@@ -51,6 +51,7 @@
+ local REMOVE_EVENT = "stombor_zoning.removeZoneAt"
+ local UPDATE_EVENT = "stombor_zoning.updateZone"
+ local DELETE_EVENT = "stombor_zoning.deleteZone"
++local RESET_GUARDS_EVENT = "stombor_zoning.resetGuards"
+ -- the zoning layer's window: zones are only drawn while it is visible
+ local LAYER_WINDOW_ID = "stombor_zoning.layer.window"
+ local PASS_INTERVAL = 5          -- simulated seconds between enforcement passes
+@@ -839,12 +840,13 @@
+ local function update(_userParams, state, dt)
+ 	local s = loadState(state)
+ 	-- saves from before the update and delete events only have the first two subscriptions
+-	if not state:hasEventSubscriptions() or (s.subscriptions or 1) < 2 then
++	if not state:hasEventSubscriptions() or (s.subscriptions or 1) < 3 then
+ 		state:subscribeToEvent(ADD_EVENT)
+ 		state:subscribeToEvent(REMOVE_EVENT)
+ 		state:subscribeToEvent(UPDATE_EVENT)
+ 		state:subscribeToEvent(DELETE_EVENT)
+-		s.subscriptions = 2
++		state:subscribeToEvent(RESET_GUARDS_EVENT)
++		s.subscriptions = 3
+ 	end
+ 	if dt == nil or dt <= 0 then
+ 		state:set(s)
+@@ -955,11 +957,18 @@
+ 	return true
+ end
+ 
++-- forgets the stored demand of every town: the next pass stores the current values as the new originals
++local function resetGuards(s, _param)
++	s.guards = nil
++	return true
++end
++
+ local HANDLERS = {
+ 	[ADD_EVENT] = addZone,
+ 	[REMOVE_EVENT] = removeZoneAt,
+ 	[UPDATE_EVENT] = updateZone,
+ 	[DELETE_EVENT] = deleteZone,
++	[RESET_GUARDS_EVENT] = resetGuards,
+ }
+ 
+ local function handleEvent(_userParams, state, _src, _id, name, param)
