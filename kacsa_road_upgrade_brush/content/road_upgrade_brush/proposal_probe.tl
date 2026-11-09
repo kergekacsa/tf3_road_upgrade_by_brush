@@ -1,6 +1,7 @@
--- Diagnostic probe, on only with the mod option "Debug: upgrade log". With the option Off no function here reads a road or
--- a proposal; the only read is the option itself.
--- It logs what the proposal of a construction tool contains while the cursor is over a road (at most once per
+-- Diagnostic probe, on only with the mod option "Debug: upgrade log". With the option Off no function here reads a road,
+-- a proposal, or a construction, except `lotHouses`: the commit uses its result with the option On or Off. It returns the
+-- list of lot houses that the commit puts in the removal list of a retry. An empty list means that nothing is put in.
+-- The probe logs what the proposal of a construction tool contains while the cursor is over a road (at most once per
 -- MIN_INTERVAL seconds, only a changed line, at most MAX_LINES per session), and for each road of an upgrade the old
 -- road, the added segment, and the road after the command (at most PRESS_LINE_CAP lines per press and
 -- SESSION_LINE_CAP per session).
@@ -25,6 +26,11 @@ local PRESS_LINE_CAP <const> = 800
 local SESSION_LINE_CAP <const> = 4000
 -- Metres. A road after its command counts as the watched road when both end points lie this close to the old ones.
 local END_MATCH_METERS <const> = 1.0
+-- Metres. A construction counts as a lot house of a road when it lies within half the road length plus this reach of the
+-- middle of the road.
+local LOT_REACH_METERS <const> = 30
+-- More lot houses than this give an empty list, never a part of the list.
+local MAX_LOT_HOUSES <const> = 24
 
 local linesLogged = 0
 local describeCalls = 0
@@ -355,6 +361,41 @@ local function after(watch : RubProbeWatch, state : string)
 	if not ok then
 		line(string.format("edge %d attempt %d after: read failed: %s", watch.edge, watch.attempt, tostring(err)))
 	end
+end
+
+-- A lot house is a construction with exactly one town building and no station, depot, or industry.
+local function isLotHouse(c : Engine.Component.Construction) : boolean
+	return c ~= nil and #(c.townBuildings or {}) == 1 and #(c.stations or {}) == 0 and #(c.depots or {}) == 0
+		and #(c.industries or {}) == 0
+end
+
+-- The lot houses within reach of the road `edge`, in the order the octree gives them. It raises an error when a read fails.
+local function housesNear(edge : integer) : {integer}
+	local types = api.type.ComponentType
+	local old = api.engine.getComponent(edge, types.BASE_EDGE) as Engine.Component.BaseEdge
+	if old == nil then error("no road component", 0) end
+	local ends = endsOf(old)
+	local length = old.distance ~= nil and old.distance or pointGap(ends, 1, ends, 4)
+	local middle = api.type.Vec2f.new((ends[1] + ends[4]) / 2, (ends[2] + ends[5]) / 2)
+	local found = api.engine.util.octree.findEntitiesInCircle(middle, length / 2 + LOT_REACH_METERS, types.CONSTRUCTION) as {integer}
+	local houses : {integer} = {}
+	for _, e in ipairs(found) do
+		if isLotHouse(api.engine.getComponent(e, types.CONSTRUCTION) as Engine.Component.Construction) then houses[#houses + 1] = e end
+	end
+	return houses
+end
+
+function probe.lotHouses(edge : integer) : {integer}, string
+	local ok, houses = pcall(housesNear, edge)
+	if not ok then return {}, "lot house read failed: " .. tostring(houses) end
+	local found = houses as {integer}
+	if #found > MAX_LOT_HOUSES then
+		return {}, string.format("%d lot houses found within %d m of the road, more than the cap of %d, none put in toRemove", #found,
+			LOT_REACH_METERS, MAX_LOT_HOUSES)
+	end
+	local ids : {string} = {}
+	for i, e in ipairs(found) do ids[i] = tostring(e) end
+	return found, string.format("%d lot houses within %d m of the road: [%s]", #found, LOT_REACH_METERS, table.concat(ids, ", "))
 end
 
 function probe.press(edges : {integer}) : RubProbePress

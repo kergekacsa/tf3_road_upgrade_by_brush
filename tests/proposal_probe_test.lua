@@ -32,13 +32,16 @@ local track = { roadTemplate = "standard", type = 0, typeIndex = 0, roadDevelopm
   edgeDecorations = {}, laneConfigs = {}, position0 = { x = 0, y = 0, z = 0 }, position1 = { x = 30, y = 0, z = 0 } }
 local comps = { [1] = oldRoad, [2] = newRoad, [3] = otherRoad, [4] = track }
 local found = { 1, 2, 3 }
+local constructions = {}
+local foundConstructions = {}
+local octreeThrows, constructionReadThrows = false, false
 
 support.installRequire({ bb_brush = { EDGE_MARGIN = 100 } })
 _G.log = { message = function(m) if logThrows then error("log broke") end logged[#logged + 1] = m end }
 _G.api = {
   type = {
     enum = { RoadType = { STREET = STREET, TRACK = TRACK } },
-    ComponentType = { BASE_EDGE = "BASE_EDGE", BASE_EDGE_STREET = "BASE_EDGE_STREET", PLAYER_OWNED = "PLAYER_OWNED" },
+    ComponentType = { BASE_EDGE = "BASE_EDGE", BASE_EDGE_STREET = "BASE_EDGE_STREET", PLAYER_OWNED = "PLAYER_OWNED", CONSTRUCTION = "CONSTRUCTION" },
     Vec2f = { new = function(x, y) return { x = x, y = y } end },
   },
   engine = {
@@ -47,10 +50,29 @@ _G.api = {
       calls.getComponent = (calls.getComponent or 0) + 1
       if componentType == "BASE_EDGE_STREET" then return streetEdges[e] and {} or nil end
       if componentType == "PLAYER_OWNED" then return e ~= 3 and { player = 5 } or nil end
+      if componentType == "CONSTRUCTION" then
+        if constructionReadThrows then error("construction read refused", 0) end
+        return constructions[e]
+      end
       return comps[e]
     end,
-    system = { parcelSystem = { getParcelData = function() calls.parcels = (calls.parcels or 0) + 1; return { leftEntities = { 11, 12 }, rightParcels = {} } end } },
-    util = { octree = { findEntitiesInCircle = function(_, radius) calls.octree = (calls.octree or 0) + 1; calls.radius = radius; return found end } },
+    system = {
+      parcelSystem = {
+        getParcelData = function() calls.parcels = (calls.parcels or 0) + 1; return { leftEntities = { 11, 12 }, rightParcels = {} } end,
+        getSegment2ParcelData = function() calls.parcels = (calls.parcels or 0) + 1; return {} end,
+      },
+    },
+    util = { octree = { findEntitiesInCircle = function(center, radius, componentType)
+      calls.octree = (calls.octree or 0) + 1
+      if componentType == "CONSTRUCTION" then
+        if octreeThrows then error("octree refused", 0) end
+        calls.constructionQueries = (calls.constructionQueries or 0) + 1
+        calls.constructionCenter, calls.constructionRadius = center, radius
+        return foundConstructions
+      end
+      calls.radius = radius
+      return found
+    end } },
   },
 }
 
@@ -79,6 +101,18 @@ check("off: no game read", next(calls) == nil, calls.getComponent)
 check("off: the state function is never run", offStateRead == false)
 check("off: nothing logged", #logged == 0)
 check("off: install left the function of the tool as it was", offParams.getProposalStringsFn == offOriginal)
+reset()
+foundConstructions = { 101 }
+constructions[101] = { townBuildings = { 1001 }, stations = {}, depots = {}, industries = {} }
+local offHouses, offHouseText = probe.lotHouses(1)
+local offHouseCalls = calls
+check("off: lotHouses returns the lot houses and the text, as with the option On",
+  #offHouses == 1 and offHouses[1] == 101 and offHouseText == "1 lot houses within 30 m of the road: [101]", offHouseText)
+check("off: lotHouses reads the road, the octree and the constructions but not the option and no parcel",
+  offHouseCalls.params == nil and offHouseCalls.parcels == nil and offHouseCalls.constructionQueries == 1 and offHouseCalls.getComponent == 2,
+  tostring(offHouseCalls.params) .. "/" .. tostring(offHouseCalls.getComponent))
+check("off: lotHouses logs nothing", #logged == 0)
+foundConstructions, constructions = {}, {}
 
 -- The option is On: the press reads the roads, the handle writes the lines
 optionValue = 2
@@ -166,6 +200,7 @@ local result = hookParams.getProposalStringsFn({
 }, nil)
 check("hook: the original result is returned", result[1] == "original")
 check("hook: the proposal line names the tool", contains(logged[#logged], "ACTION_BUS_LANE_TOOL:"))
+check("hook: the proposal line has no chain text", not contains(logged[#logged], "chain:"), logged[#logged])
 reset()
 local bareParams = {}
 probe.install(bareParams, "ACTION_TRAM_TRACK_TOOL")
@@ -217,6 +252,96 @@ local capNotices = 0
 for _, m in ipairs(logged) do if contains(m, "hook read cap of 200") then capNotices = capNotices + 1 end end
 check("hook cap: the original result still comes back after the cap", capParams.getProposalStringsFn(capProposal, nil)[1] == "original")
 check("hook cap: one notice when the cap is reached", capNotices == 1, capNotices)
+
+-- The lot houses around a road, with the option On
+local function house(id) constructions[id] = { townBuildings = { id + 5000 }, stations = {}, depots = {}, industries = {} } end
+local function ids(list) return table.concat(list, ", ") end
+constructions = {
+  [101] = { townBuildings = { 1 }, stations = {}, depots = {}, industries = {} },
+  [102] = { townBuildings = { 2 }, stations = {}, depots = {}, industries = {} },
+  [103] = { townBuildings = {}, stations = { 9 }, depots = {}, industries = {} },
+  [104] = { townBuildings = { 1, 2 }, stations = {}, depots = {}, industries = {} },
+  [105] = { townBuildings = { 1 }, stations = {}, depots = { 7 }, industries = {} },
+  [106] = { townBuildings = { 1 }, stations = {}, depots = {}, industries = { 8 } },
+  [107] = { townBuildings = {}, stations = {}, depots = {}, industries = {} },
+  [108] = { townBuildings = { 3 } },
+}
+foundConstructions = { 101, 103, 104, 105, 106, 107, 108, 109, 102 }
+reset()
+local houses, houseText = probe.lotHouses(1)
+check("lot houses: only constructions with exactly one town building and nothing else are kept, in the order found",
+  ids(houses) == "101, 108, 102", ids(houses))
+check("lot houses: the text names the count, the reach and the ids",
+  houseText == "3 lot houses within 30 m of the road: [101, 108, 102]", houseText)
+check("lot houses: one query of the constructions, centred between the end points",
+  calls.constructionQueries == 1 and calls.constructionCenter.x == 5 and calls.constructionCenter.y == 0)
+check("lot houses: the radius is half the road length plus 30 m", calls.constructionRadius == 35, calls.constructionRadius)
+check("lot houses: nothing is logged and no parcel is read", #logged == 0 and calls.parcels == nil)
+
+reset()
+local noDistanceHouses = probe.lotHouses(2)
+check("lot houses: a road without a length uses the distance of its end points",
+  #noDistanceHouses == 3 and math.abs(calls.constructionRadius - (math.sqrt(100.2) / 2 + 30)) < 1e-9, calls.constructionRadius)
+check("lot houses: the centre of such a road is the middle of its end points",
+  calls.constructionCenter.x == 5 and math.abs(calls.constructionCenter.y - 0.2) < 1e-9)
+
+reset()
+foundConstructions = {}
+local noHouses, noHouseText = probe.lotHouses(1)
+check("lot houses: no construction near the road gives an empty list and a text with count 0",
+  #noHouses == 0 and noHouseText == "0 lot houses within 30 m of the road: []", noHouseText)
+
+foundConstructions = {}
+for id = 200, 223 do house(id); foundConstructions[#foundConstructions + 1] = id end
+reset()
+local atCapHouses = probe.lotHouses(1)
+check("lot houses: exactly 24 qualifying constructions are all returned", #atCapHouses == 24 and atCapHouses[1] == 200 and atCapHouses[24] == 223, #atCapHouses)
+house(224); foundConstructions[#foundConstructions + 1] = 224
+for id = 225, 229 do house(id); foundConstructions[#foundConstructions + 1] = id end
+reset()
+local cappedHouses, cappedText = probe.lotHouses(1)
+check("lot houses: more than 24 qualifying constructions give an empty list, never a partial one", #cappedHouses == 0, #cappedHouses)
+check("lot houses: the text names the count found, the cap, and that none were put in toRemove",
+  cappedText == "30 lot houses found within 30 m of the road, more than the cap of 24, none put in toRemove", cappedText)
+
+foundConstructions = { 101, 102 }
+reset()
+octreeThrows = true
+local octreeHouses, octreeText = probe.lotHouses(1)
+octreeThrows = false
+check("lot houses: a failing octree query gives an empty list and a text that says the read failed",
+  #octreeHouses == 0 and contains(octreeText, "read failed"), octreeText)
+reset()
+constructionReadThrows = true
+local constructionHouses, constructionText = probe.lotHouses(1)
+constructionReadThrows = false
+check("lot houses: a failing construction read gives an empty list and a text that says the read failed",
+  #constructionHouses == 0 and contains(constructionText, "read failed"), constructionText)
+reset()
+local missingHouses, missingText = probe.lotHouses(99)
+check("lot houses: a road without a component gives an empty list, a text that says the read failed, and no query",
+  #missingHouses == 0 and contains(missingText, "read failed") and calls.constructionQueries == nil, missingText)
+check("lot houses: the probe never calls a function of the parcel system", calls.parcels == nil)
+
+foundConstructions = { 101, 103, 104, 105, 106, 107, 108, 109, 102 }
+constructions[109] = nil
+optionValue = 1
+probe.beginPress()
+reset()
+local offList, offListText = probe.lotHouses(1)
+check("lot houses: with the option Off the list and the text equal those with the option On",
+  ids(offList) == "101, 108, 102" and offListText == "3 lot houses within 30 m of the road: [101, 108, 102]", offListText)
+check("lot houses: with the option Off the query, the centre and the radius equal those with the option On",
+  calls.constructionQueries == 1 and calls.constructionCenter.x == 5 and calls.constructionCenter.y == 0 and calls.constructionRadius == 35)
+reset()
+foundConstructions = { 101, 102 }
+octreeThrows = true
+local offOctreeHouses, offOctreeText = probe.lotHouses(1)
+octreeThrows = false
+check("lot houses: with the option Off a failing read gives an empty list and a text that says the read failed",
+  #offOctreeHouses == 0 and contains(offOctreeText, "read failed") and #logged == 0, offOctreeText)
+optionValue = 2
+probe.beginPress()
 
 -- The caps
 probe.beginPress()

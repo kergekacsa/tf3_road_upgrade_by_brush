@@ -7,6 +7,8 @@
 local gather = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_gather.tl" as RubGather
 local sel = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_select.tl" as RubSelect
 local probe = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/proposal_probe.tl" as RubProposalProbe
+local pairSpike = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/pair_spike.tl" as RubPairSpike
+local crosswalkPass = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/crosswalk_pass.tl" as RubCrosswalkPass
 
 local upgrade : RubCommit = {}
 
@@ -21,6 +23,10 @@ local EXTRAS_NOT_APPLIED <const> = "bus lane or lock could not be set"
 local COMMAND_GAP <const> = 0.1
 
 local RETRY_PASSES <const> = 2
+-- The pass number that the progress callback reports while the crosswalk pass runs.
+local CROSSWALK_PASS <const> = -1
+-- The retry pass in which a failed road gets its lot houses in the removal list.
+local LOT_HOUSE_ATTEMPT <const> = 1
 
 local pendingStep : function() = nil
 local pendingDueAt : number = 0
@@ -69,9 +75,13 @@ function upgrade.tick()
 	end
 end
 
-local function afterGap(step : function())
+local function afterSeconds(seconds : number, step : function())
 	pendingStep = step
-	pendingDueAt = os.clock() + COMMAND_GAP
+	pendingDueAt = os.clock() + seconds
+end
+
+local function afterGap(step : function())
+	afterSeconds(COMMAND_GAP, step)
 end
 
 -- gatherBuildings and gatherFields let the proposal demolish the buildings and fields that block the new road.
@@ -450,6 +460,27 @@ local function addToRemove(p : Proposal, ids : {integer})
 	p.toRemove = list
 end
 
+-- The entities of `ids` that still exist, in order. The game refuses a removal list with an entity that is gone ("Unknown
+-- exception" in PreprocessProposal).
+local function existing(ids : {integer}) : {integer}
+	local remaining : {integer} = {}
+	for _, id in ipairs(ids) do
+		if api.engine.entityExists(id) then remaining[#remaining + 1] = id end
+	end
+	return remaining
+end
+
+-- The game names a building lot in this English text; in another game language the text does not match and the hint for the
+-- player stays away.
+local PARCEL_MESSAGE <const> = "Unexpected parcel"
+
+local function mentionsParcel(messages : {string}) : boolean
+	for _, message in ipairs(messages) do
+		if string.find(message, PARCEL_MESSAGE, 1, true) ~= nil then return true end
+	end
+	return false
+end
+
 -- Cost of the roads the game did upgrade; nil when the game reports none.
 local function costOf(data : WorldBuildProposalCommandData) : integer
 	local ok, c = pcall(function() : integer return data.resultProposalData.costs end)
@@ -611,6 +642,7 @@ local record Prepared
 	context : Context
 	force : boolean
 	errText : string
+	partner : integer
 end
 
 function upgrade.commit(edges : {integer}, template : string, extras : RubExtras, removeBuildings : boolean, ctx : RubContext,
@@ -625,7 +657,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	edges = edges or {}
 	local res : RubCommitResult = {
 		requested = #edges, removed = 0, unchanged = 0, failed = {}, skipped = 0, reasons = {}, commands = 0,
-		refused = nil, cost = nil, seconds = 0, rail = railTarget ~= nil,
+		refused = nil, cost = nil, seconds = 0, rail = railTarget ~= nil, lotFailures = 0, buildingsKept = not removeBuildings,
 	}
 	if running ~= nil then
 		-- The roads stay selected: a refusal reports them as failed.
@@ -668,6 +700,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		res.reasons[reason] = (res.reasons[reason] or 0) + (n or 1)
 	end
 	local mine : Running = {}
+	local crosswalks = crosswalkPass.new()
 	local function finish()
 		if finished then return end
 		finished = true
@@ -697,6 +730,8 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		cancelled = true
 		pendingStep = nil
 		logLine("upgrade cancelled by the user")
+		local left = crosswalks:unfinished()
+		if left > 0 then logLine(string.format("crosswalks: pass cut off by the cancel, %d touched nodes not done", left), "failure") end
 		if not busy then finish() end
 	end
 	mine.abort = function()
@@ -742,11 +777,14 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		#queue, railTarget ~= nil and "tracks" or "roads", template or "per track", extrasText(extras), #decorations,
 		tostring(removeBuildings), simulationText()))
 
-	-- `probe.press` MUST NOT run in a command callback. It reads every road of the press here, before the first command.
+	-- `probe.press` and `crosswalks:prepare` MUST NOT run in a command callback. They read the roads of the press here, before
+	-- the first command. Tracks have no crosswalks.
 	local press = probe.press(queue)
+	if railTarget == nil then crosswalks:prepare(queue) end
 
 	local failed : {integer} = {}
 	local failedReason : {integer : string} = {}
+	local lotFailed : {integer : boolean} = {}
 	local function fail(e : integer, reason : string)
 		failed[#failed + 1] = e
 		failedReason[e] = reason
@@ -762,6 +800,75 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	-- Both need the option "Remove buildings in the way".
 	local assetBlockers : {integer : {integer}} = {}
 
+	-- Pair spike: the roads of the current retry pass, the neighbours of each road that are still to be tried, the pairs that were
+	-- tried (key "small:large"), and the neighbours that a successful pair command upgraded, so that their own turn does nothing.
+	local record PairQueue
+		list : {integer}
+		next : integer
+	end
+	local retryList : {integer} = {}
+	local pairQueues : {integer : PairQueue} = {}
+	local pairTried : {string : boolean} = {}
+	local pairHandled : {integer : boolean} = {}
+
+	local function pairKey(a : integer, b : integer) : string
+		return math.min(a, b) .. ":" .. math.max(a, b)
+	end
+
+	local function pairable(e : integer, c : integer) : boolean
+		return c ~= e and not pairHandled[c] and assetBlockers[c] == nil and not pairTried[pairKey(e, c)]
+	end
+
+	-- The neighbours of the road, found once per road: the roads of the retry pass that can still be paired with it.
+	local function queueOf(e : integer) : PairQueue
+		local known = pairQueues[e]
+		if known ~= nil then return known end
+		local candidates : {integer} = {}
+		for _, c in ipairs(retryList) do
+			if pairable(e, c) then candidates[#candidates + 1] = c end
+		end
+		local created : PairQueue = { list = #candidates > 0 and pairSpike.partners(e, candidates) or {}, next = 1 }
+		pairQueues[e] = created
+		return created
+	end
+
+	-- The first neighbour of the queue that can still be paired. With `take` the queue moves past it.
+	local function nextPartner(e : integer, take : boolean) : integer
+		local pending = queueOf(e)
+		for i = pending.next, #pending.list do
+			local c = pending.list[i]
+			if pairable(e, c) then
+				if take then pending.next = i + 1 end
+				return c
+			end
+		end
+		return nil
+	end
+
+	-- The road and its next neighbour in ONE proposal. Returns the neighbour after it set `prepared`, or nil with `prepared`
+	-- unchanged: the road is then retried alone. An error while the pair is built is logged, drops the other neighbours of the
+	-- road, and has the same result.
+	local function tryPair(e : integer, target : string, wanted : {{integer, boolean}}, setWanted : boolean, prepared : Prepared) : integer
+		local partner = nextPartner(e, true)
+		if partner == nil then return nil end
+		pairTried[pairKey(e, partner)] = true
+		local ok, err = pcall(function() : string
+			if #(upgrade.assertHardRules({ partner }, ctx, industryRoads, kind)) == 0 then error("the neighbour no longer passes the hard rules", 0) end
+			local base, baseSummary = proposalOf(e, target, wanted, extras, setWanted)
+			local other, otherSummary = proposalOf(partner, target, wanted, extras, setWanted)
+			if base == nil or other == nil then error("no proposal for one of the roads", 0) end
+			local mergeText = pairSpike.merge(base, other)
+			prepared.p = base
+			prepared.summary = string.format("%s; pair spike: edge %d merged with edge %d (%s; proposal of the neighbour: %s); no lot houses put in toRemove (the game gathers the buildings)",
+				baseSummary, e, partner, mergeText, otherSummary)
+			return nil
+		end)
+		if ok then return partner end
+		pairQueues[e].next = #pairQueues[e].list + 1
+		logLine(string.format("pair spike: building the pair for edges %d and %d failed, the road is retried alone: %s", e, partner, tostring(err)), "failure")
+		return nil
+	end
+
 	-- Builds the proposal of one road and the context of its command. The game calls this from its own thread: an error in
 	-- the preparation fails the road, not the whole run.
 	local function prepareCommand(e : integer, attempt : integer, target : string, wanted : {{integer, boolean}}, setWanted : boolean) : Prepared
@@ -772,12 +879,8 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			prepared.context = makeContext(removeBuildings)
 			local blockers = removeBuildings and attempt > 0 and assetBlockers[e] or nil
 			if blockers ~= nil then
-				-- An earlier road of this press may have removed a shared asset group; the game refuses a removal list
-				-- with an entity that is gone ("Unknown exception" in PreprocessProposal).
-				local remaining : {integer} = {}
-				for _, a in ipairs(blockers) do
-					if api.engine.entityExists(a) then remaining[#remaining + 1] = a end
-				end
+				-- An earlier road of this press may have removed a shared asset group.
+				local remaining = existing(blockers)
 				blockers = #remaining > 0 and remaining or nil
 			end
 			prepared.force = blockers ~= nil and attempt >= RETRY_PASSES
@@ -785,6 +888,20 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 				addToRemove(prepared.p, blockers)
 				prepared.summary = prepared.summary .. string.format("; %d asset groups in the way put in toRemove%s", #blockers,
 					prepared.force and ", sent with ignoreErrors" or "")
+			end
+			local lotHouseRetry = removeBuildings and attempt == LOT_HOUSE_ATTEMPT and assetBlockers[e] == nil
+			if lotHouseRetry and railTarget == nil then
+				prepared.partner = tryPair(e, target, wanted, setWanted, prepared)
+			end
+			if lotHouseRetry and railTarget == nil and prepared.partner == nil then
+				local found, houseText = probe.lotHouses(e)
+				if houseText ~= "" then prepared.summary = prepared.summary .. "; " .. houseText end
+				-- An earlier road of this press may have removed a shared house.
+				local houses = existing(found)
+				if #houses > 0 then
+					addToRemove(prepared.p, houses)
+					prepared.summary = prepared.summary .. string.format("; %d lot houses put in toRemove", #houses)
+				end
 			end
 			return nil
 		end)
@@ -795,9 +912,16 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		return prepared
 	end
 
-	-- The answer of the game to the command of one road. `done` runs after the command gap.
-	local function onCommandResult(e : integer, attempt : integer, summary : string, data : WorldBuildProposalCommandData,
-			success : boolean, done : function())
+	-- Forward declaration: sendRoad builds and sends the command of one road.
+	local sendRoad : function(integer, integer, string, {{integer, boolean}}, boolean, function())
+
+	-- The answer of the game to the command of one road. `done` runs after the command gap. `again` sends the next pair
+	-- command of the road.
+	local function onCommandResult(e : integer, attempt : integer, prepared : Prepared, data : WorldBuildProposalCommandData,
+			success : boolean, done : function(), again : function())
+		local partner = prepared.partner
+		local summary = prepared.summary
+		local pairAgain = false
 		res.commands = res.commands + 1
 		local msgs = messagesOf(data)
 		local cost = costOf(data)
@@ -807,7 +931,19 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			report(e, true)
 			if cost ~= nil then res.cost = (res.cost or 0) + cost end
 			if attempt > 0 then recovered = recovered + 1 end
+			crosswalks:touchRoad(e)
+			if partner ~= nil then
+				res.removed = res.removed + 1
+				pairHandled[partner] = true
+				report(partner, true)
+				if attempt > 0 then recovered = recovered + 1 end
+				crosswalks:touchRoad(partner)
+			end
+		elseif partner ~= nil and nextPartner(e, false) ~= nil then
+			outcome = "FAILED"
+			pairAgain = true
 		else
+			lotFailed[e] = mentionsParcel(msgs)
 			fail(e, msgs[1] or REFUSED_BY_GAME)
 			outcome = "FAILED"
 			local assets, onlyAssets = assetGroupsOf(data, e)
@@ -824,6 +960,18 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		end
 		afterGap(function()
 			press.after(e, simulationText)
+			if partner ~= nil and success == true then
+				press.road(partner, attempt)
+				press.after(partner, simulationText)
+			end
+			if pairAgain then
+				local okA, errA = pcall(function() : string again(); return nil end)
+				if not okA then
+					logLine("pair spike: the next pair command failed: " .. tostring(errA), "failure")
+					finish()
+				end
+				return
+			end
 			local okC, errC = pcall(function() : string done(); return nil end)
 			if not okC then
 				logLine("upgrade callback failed: " .. tostring(errC), "failure")
@@ -832,9 +980,53 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		end)
 	end
 
+	-- The proposal of one road and its command, sent while the game is paused. `done` runs when the road is finished.
+	sendRoad = function(e : integer, attempt : integer, target : string, wanted : {{integer, boolean}}, setWanted : boolean, done : function())
+		local prepared = prepareCommand(e, attempt, target, wanted, setWanted)
+		press.proposal(e, prepared.p, res.commands)
+		if prepared.errText ~= nil then
+			logLine(string.format("edge %d: preparing the command failed: %s", e, prepared.errText), "failure")
+			fail(e, "script error")
+			done()
+			return
+		end
+		if prepared.p == nil then
+			fail(e, prepared.why or REFUSED_BY_GAME)
+			logLine(string.format("edge %d: %s", e, prepared.summary), "failure")
+			done()
+			return
+		end
+		if prepared.partner ~= nil then
+			logLine(string.format("pair spike: sending ONE proposal for edges %d and %d (a merged proposal can crash the game)", e, prepared.partner))
+		end
+		local called = false
+		busy = true
+		local okS, errS = pcall(function() : string
+			local cmd = api.cmd.makeWorldBuildProposalCmd(prepared.p, prepared.context, prepared.force, true, true)
+			api.cmd.sendCommand(cmd, function(data : WorldBuildProposalCommandData, success : boolean)
+				if called or finished then return end
+				called = true
+				busy = false
+				onCommandResult(e, attempt, prepared, data, success, done, function() sendRoad(e, attempt, target, wanted, setWanted, done) end)
+			end)
+			return nil
+		end)
+		if not okS and not called then
+			called = true
+			busy = false
+			logLine("send failed: " .. tostring(errS), "failure")
+			fail(e, "script error")
+			done()
+		end
+	end
+
 	-- One road: nothing for a road that already is the target; else its command, sent while the game is paused.
 	-- `done` runs when the road is finished, from the command callback when a command was sent.
 	local function upgradeRoad(e : integer, attempt : integer, done : function())
+		if pairHandled[e] then
+			done()
+			return
+		end
 		local target = template
 		local same : boolean
 		local wanted = decorations
@@ -884,39 +1076,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 				done()
 				return
 			end
-			local prepared = prepareCommand(e, attempt, target, wanted, setWanted)
-			press.proposal(e, prepared.p, res.commands)
-			if prepared.errText ~= nil then
-				logLine(string.format("edge %d: preparing the command failed: %s", e, prepared.errText), "failure")
-				fail(e, "script error")
-				done()
-				return
-			end
-			if prepared.p == nil then
-				fail(e, prepared.why or REFUSED_BY_GAME)
-				logLine(string.format("edge %d: %s", e, prepared.summary), "failure")
-				done()
-				return
-			end
-			local called = false
-			busy = true
-			local okS, errS = pcall(function() : string
-				local cmd = api.cmd.makeWorldBuildProposalCmd(prepared.p, prepared.context, prepared.force, true, true)
-				api.cmd.sendCommand(cmd, function(data : WorldBuildProposalCommandData, success : boolean)
-					if called or finished then return end
-					called = true
-					busy = false
-					onCommandResult(e, attempt, prepared.summary, data, success, done)
-				end)
-				return nil
-			end)
-			if not okS and not called then
-				called = true
-				busy = false
-				logLine("send failed: " .. tostring(errS), "failure")
-				fail(e, "script error")
-				done()
-			end
+			sendRoad(e, attempt, target, wanted, setWanted, done)
 		end)
 	end
 
@@ -944,7 +1104,52 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		for _, e in ipairs(failed) do
 			skip(failedReason[e])
 			res.failed[#res.failed + 1] = e
+			if lotFailed[e] then res.lotFailures = res.lotFailures + 1 end
 		end
+	end
+
+	-- What the crosswalk pass may use: one command at a time with its answer delivered after the command gap, a wait that goes through
+	-- the same pending step as the gap, the log, a fresh context, and the cancel flag.
+	local function crosswalkEnv() : RubCrosswalkEnv
+		return {
+			send = function(command : Command<WorldBuildProposalCommandData>, callback : function(boolean, string))
+				local called = false
+				busy = true
+				local okS, errS = pcall(function() : string
+					api.cmd.sendCommand(command, function(data : WorldBuildProposalCommandData, success : boolean)
+						if called or finished then return end
+						called = true
+						busy = false
+						if cancelled then
+							finish()
+							return
+						end
+						local text = table.concat(messagesOf(data), "; ")
+						afterGap(function() callback(success == true, text) end)
+					end)
+					return nil
+				end)
+				if not okS and not called then
+					called = true
+					busy = false
+					callback(false, "send failed: " .. tostring(errS))
+				end
+			end,
+			wait = function(seconds : number, step : function()) afterSeconds(seconds, step) end,
+			-- A line of the pass is progress for the tool: it gives up waiting for a commit that shows none for a long time.
+			log = function(text : string, tag : string)
+				logLine(text, tag)
+				report(nil, true)
+			end,
+			context = function() : Context return makeContext(removeBuildings) end,
+			cancelled = function() : boolean return cancelled or finished end,
+			progress = function(done : integer, total : integer)
+				passAttempt = CROSSWALK_PASS
+				passTotal = total
+				passFinished = done
+				report(nil, true)
+			end,
+		}
 	end
 
 	-- The failed roads go through the queue again, up to RETRY_PASSES times, each time after all the others.
@@ -958,12 +1163,13 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		end
 		if #failed == 0 or attempt >= RETRY_PASSES then
 			skipFailed()
-			finish()
+			crosswalks:run(crosswalkEnv(), finish)
 			return
 		end
 		local again = failed
 		failed = {}
 		startPass(attempt + 1, #again)
+		retryList = again
 		logLine(string.format("retry %d of %d: %d roads whose command failed", attempt + 1, RETRY_PASSES, #again))
 		runPass(again, attempt + 1, function() afterPass(attempt + 1) end)
 	end

@@ -44,7 +44,7 @@ Source: [wiki.transportfever3.com](https://wiki.transportfever3.com).
 
 - **Run:** `.\tests\run.ps1` from the staging folder. It needs the Teal compiler above and `lua55` on the PATH. The variable `$env:TL` replaces the compiler path.
 - **What it does:** `tl gen` compiles the modules listed in `$modules` of `run.ps1` into `tests/.build/` (ignored by git), after it empties that folder. Each `tests/*_test.lua` runs with `lua55` against a stub of the game's `api`.
-- **Files:** `support.lua` (module loading and the check function) and the `*_test.lua` files. `commit_flow_test.lua` tests `bb_upgrade.tl` with the real `bb_select.tl` and `proposal_probe.tl` against a stub of the game that records every command and every read of the game `api`. The reads of `bb_gather.tl` are not recorded, because the test replaces that module by a stub that describes the edges. The tests cannot load `brush_upgrade.script.tl`, so the calls of that script into the modules are not tested. `grid_builder_test.lua` tests `rub_grid_builder.tl` through its function `build`, and checks that the module creates no global variable.
+- **Files:** `support.lua` (module loading and the check function) and the `*_test.lua` files. `crosswalk_pass_test.lua` tests `crosswalk_pass.tl` with a fake env and a fake `node_crosswalks`. `node_crosswalks_test.lua` tests `node_crosswalks.tl`. `pair_spike_test.lua` tests `pair_spike.tl` with proposals that hand out copies of their data. `commit_flow_test.lua` tests `bb_upgrade.tl` with the real `bb_select.tl`, `proposal_probe.tl`, `pair_spike.tl`, `node_crosswalks.tl`, and `crosswalk_pass.tl` against a stub of the game that records every command and every read of the game `api`. The reads of `bb_gather.tl` are not recorded, because the test replaces that module by a stub that describes the edges. The tests cannot load `brush_upgrade.script.tl`, so the calls of that script into the modules are not tested. `grid_builder_test.lua` tests `rub_grid_builder.tl` through its function `build`, and checks that the module creates no global variable.
 - **New module:** add its name to `$modules` in `run.ps1` and cover it in a `*_test.lua` file. One test file MAY cover several modules.
 - **Limit:** the tests prove the logic of the mod. They do not prove that the game accepts a call.
 
@@ -69,7 +69,7 @@ Source: [wiki.transportfever3.com](https://wiki.transportfever3.com).
   `grid = ug_require("kacsa_road_upgrade_brush::/road_upgrade_brush/rub_grid_builder.tl").build`
   Then type `grid()` for the defaults, or pass a table, for example `grid{blocksAlong=4, largeEveryAlong=2, largeEveryLeft=0}`. A key that the table leaves out keeps its default. A console that does not keep `grid` needs the whole `ug_require(...).build(...)` expression in each call.
 - **Reloading the module:** a load of a save re-reads the tool script from disk, but the console keeps the module that it loaded first in the game session (the log of a run showed the old code after a load). The first log line of a run ends with the build mark of the module, which shows the version that ran. After a change to `rub_grid_builder.tl`, either restart the game, or clear the console copy and define `grid` again in one line:
-  `for k in pairs(package.loaded) do if string.find(k, "rub_grid_builder", 1, true) then package.loaded[k] = nil end end; grid = ug_require("kacsa_road_upgrade_brush::/road_upgrade_brush/rub_grid_builder.tl").build`
+  `for k in pairs(package.loaded) do if string.find(k, "rub_grid_builder", 1, true) or string.find(k, "node_crosswalks", 1, true) then package.loaded[k] = nil end end; grid = ug_require("kacsa_road_upgrade_brush::/road_upgrade_brush/rub_grid_builder.tl").build`
   The second way is untested in the game.
 - **Options:** the fields, their meaning, and their defaults are the docblocks of `RubGridOptions` in `brush_types.d.tl`. This file does not repeat them.
 - **Start:** the function takes the street edge whose midpoint is nearest to the camera centre, within `cameraSearchRadiusM`, as the strip. Tracks do not count. The game does not offer a loop over all edges (`Cannot loop over this component type`), so the camera centre is the only anchor.
@@ -121,5 +121,6 @@ The same module has the console function `setSmallRoadSpeed(kmh)`. It works on t
 
 ## Other checks in the same flow
 
+- **Generator:** `strings.json` and the texts of `mod.json` come from the generator in `C:\Users\Kacsa\tools\strings-gen` (`table.js` holds the translations, `build.js` writes `strings.json`). After a text change in `mod.json` or the code, update `table.js` and run `node build.js`.
 - **Strings:** run `node build.js --check` in `C:\Users\Kacsa\tools\strings-gen`. It verifies every text of the mod against the 13 languages.
 - **JSON:** run `node -e "JSON.parse(...)"` on `modinfo.json` and `strings.json`.

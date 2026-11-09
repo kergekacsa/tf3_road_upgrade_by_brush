@@ -273,6 +273,8 @@ global record RubCommitResult
 	seconds : number                -- wall time from commit() to onDone (os.clock)
 	cancelled : boolean             -- stopped by cancel(): the roads not yet reached were left alone
 	rail : boolean                  -- the edges were tracks
+	lotFailures : integer           -- failed roads whose game messages name an unexpected parcel (a building lot)
+	buildingsKept : boolean         -- "Remove buildings in the way" was off
 end
 
 --- The add-ons of Road Upgrade All in One that change the lanes or the lock of the new segments.
@@ -357,7 +359,7 @@ global record RubStatusInput
 	result : RubStatusText -- a recent result / notice (shown instead of "Nothing selected"), or nil
 	progressDone : integer           -- roads done in the current pass of the running upgrade
 	progressTotal : integer          -- roads in the current pass
-	retryAttempt : integer          -- 0 in the first pass, 1 and 2 in the retry passes
+	retryAttempt : integer          -- 0 in the first pass, 1 and 2 in the retry passes, -1 while the crosswalk pass runs (then the progress counts junctions)
 	retryPasses : integer           -- how many retry passes there are
 end
 

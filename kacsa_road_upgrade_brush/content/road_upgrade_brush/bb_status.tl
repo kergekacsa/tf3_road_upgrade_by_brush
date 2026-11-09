@@ -141,6 +141,11 @@ function status.lines(v : RubStatusInput) : RubStatusText
 			local percent = math.floor(done * 100 / total)
 			local filled = math.floor(done * PROGRESS_BAR_WIDTH / total)
 			local bar = "[" .. string.rep("#", filled) .. string.rep(".", PROGRESS_BAR_WIDTH - filled) .. "]"
+			if (v.retryAttempt or 0) < 0 then
+				local t = text(_("Placing crosswalks"), string.format(_("%s %d of %d"), bar, done, total), nil, stopHint())
+				t.running = true
+				return t
+			end
 			if (v.retryAttempt or 0) > 0 then
 				local t = text(string.format(_("Retrying failed ones %d/%d"), v.retryAttempt, v.retryPasses or 0), string.format(_("%s %d of %d"), bar, done, total), nil, stopHint())
 				t.running = true
@@ -206,6 +211,9 @@ function status.resultLines(r : RubCommitResult) : RubStatusText
 		result.head = string.format(_("%d updated,"), r.removed)
 		result.tail = string.format(_(" %d failed"), failed)
 		result.tailSeverity = "warning"
+	end
+	if failed > 0 and (r.lotFailures or 0) > 0 and r.buildingsKept and not r.rail then
+		result.hint = status.clip(_("Turn on removing buildings"), status.MAX_CHARS)
 	end
 	return result
 end

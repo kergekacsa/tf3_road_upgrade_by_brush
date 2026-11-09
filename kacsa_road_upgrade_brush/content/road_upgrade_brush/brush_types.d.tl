@@ -156,6 +156,55 @@ global record RubProposalProbe
 	install : function(params : Builtin.ConstructionActionParam, tool : string)
 	--- Reads every road of `edges` now (option On only) and returns the handle of the press. It MUST NOT run in a command callback. Every call of the handle is protected: an error in it never reaches the caller.
 	press : function(edges : {integer}) : RubProbePress
+	--- The constructions with exactly one town building near the road `edge`, as ids and a log text (with the option On or Off). More than 24 return an empty list and a text that names the count, never a part of the list. A failing read returns an empty list and a text that says so. It MUST NOT read parcels.
+	lotHouses : function(edge : integer) : {integer}, string
+end
+
+-- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/pair_spike.tl" as RubPairSpike
+global record RubPairSpike
+	--- The roads of `candidates`, other than `edge`, that share a node with `edge`, in the order of `candidates`, at most three. It reads the BASE_EDGE of the roads inside pcall, skips a road that cannot be read, and reads nothing when `candidates` is empty.
+	partners : function(edge : integer, candidates : {integer}) : {integer}
+	--- Appends the street data of `extra` (removed and added segments and nodes, edge objects to add and their maps, node configs) to `base`. Temporary ids of `extra` that `base` also uses are renumbered, with every reference to them. The renumbering also changes the entries of `extra`, so `extra` MUST NOT be used afterwards. Raises an error on malformed input. When both proposals hold a config for the same existing node, the merged list keeps one entry for it with a new empty list of lane connections and a new empty list of crosswalks: the game makes the routes, and a follow-up command adds the crosswalks. Returns a log text with the counts, the renumbered ids and the reset nodes, and the ids of the existing nodes whose config was reset.
+	merge : function(base : Proposal, extra : Proposal) : string, {integer}
+end
+
+--- A node as it was at one time: its id and its position in metres.
+global record RubNodeSpot
+	node : integer
+	x : number
+	y : number
+end
+
+--- What the engine holds for a node: the streets that end at it and the crosswalks of its config.
+global record RubNodeView
+	--- The id of the node that was found at the position, else the remembered id.
+	node : integer
+	--- false when no node lies at the position.
+	found : boolean
+	--- false when the config or the streets of the node could not be read.
+	readable : boolean
+	streets : {integer}
+	crosswalks : {integer}
+end
+
+-- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/node_crosswalks.tl" as RubNodeCrosswalks
+global record RubNodeCrosswalks
+	--- The street template of a street segment. It raises an error when the segment cannot be read.
+	templateOf : function(street : integer) : StreetTemplate
+	--- The command that rewrites the config of `node` with crosswalks, added behind the existing ones. With `allStreets` false (the console tool) it puts a crosswalk on every street segment of the node when at least one is a town street (no country road, with a pedestrian lane). With true it puts a crosswalk on EVERY street segment of the node, with no filter. Returns the command and the text "N added", or nil and a reason: "no_config", "no_town_street" (false) or "no_street" (true), "unchanged", "config_copy_failed ..." or "read_failed ...". It never raises an error.
+	command : function(node : integer, context : Context, allStreets : boolean) : Command<WorldBuildProposalCommandData>, string
+	--- Like `command`, but only the street segments with a pedestrian lane get a crosswalk (country roads included). The reason for a node without such a street is "no_pedestrian_street". It never raises an error.
+	commandSidewalk : function(node : integer, context : Context) : Command<WorldBuildProposalCommandData>, string
+	--- The id and the position of `node`, or nil when the node cannot be read.
+	remember : function(node : integer) : RubNodeSpot
+	--- `command` (with the same `allStreets`) for the node of `spot`: the remembered node while it still lies at its position, else the node within a metre of it. Returns the command, the text or the reason, and the id of the node. Without a node at the position it returns nil, "node_not_found" and the remembered id.
+	commandAt : function(spot : RubNodeSpot, context : Context, allStreets : boolean) : Command<WorldBuildProposalCommandData>, string, integer
+	--- The streets and the crosswalk list of the node of `spot` now. It never raises an error.
+	inspect : function(spot : RubNodeSpot) : RubNodeView
+	--- The two end nodes of the road `edge` as spots, without the ones that cannot be read. It never raises an error.
+	endSpots : function(edge : integer) : {RubNodeSpot}
+	--- What the engine holds for the node of `spot` now, for the log: the id of the node, the text of its crosswalk list ("K crosswalks [ids]", "no config", "unreadable (...)" or "node not found"), and one item for each of at most 8 streets: "street S template T defaultWithCrosswalk D in list yes/no", or "street S unreadable". It never raises an error.
+	readBack : function(spot : RubNodeSpot) : integer, string, {string}
 end
 
 --- Options of `RubGridBuilderModule.build`. A field that is missing keeps its default.
@@ -207,4 +256,54 @@ global record RubGridBuilderModule
 	removeLightsAndLeftTurns : function()
 	--- Replaces every small road (town or country, new or old, with its variants) that belongs to the player or to nobody, outside constructions, with its own template and sets every lane to `kmh` (default 30), one command per road. A road that already has the speed, or whose new segment would lose edge objects, is not replaced. Logs speed_start, the counts at the end, and speed_check with the number of small roads that still have another speed.
 	setSmallRoadSpeed : function(kmh : number)
+end
+
+--- What the crosswalk pass needs from its caller. Every step of the pass runs through these functions.
+global record RubCrosswalkEnv
+	--- Sends one command. `callback` gets whether it succeeded and the messages of the game, outside the command callback.
+	send : function(command : Command<WorldBuildProposalCommandData>, callback : function(boolean, string))
+	--- Runs `step` after `seconds` of real time, outside any command callback.
+	wait : function(seconds : number, step : function())
+	--- Writes one line to the log. `tag` is "upgrade" or "failure".
+	log : function(text : string, tag : string)
+	--- A fresh context for a command.
+	context : function() : Context
+	--- true when the press was cancelled or aborted: the pass stops at its next step.
+	cancelled : function() : boolean
+	--- Tells the tool how many of the touched nodes the pass has settled (complete, incomplete or skipped).
+	progress : function(done : integer, total : integer)
+end
+
+--- The junctions that a press touched, and the pass that puts crosswalks on them.
+global record RubCrosswalkPassState
+	spots : {RubNodeSpot}
+	seen : {string : boolean}
+	ends : {integer : {RubNodeSpot}}
+	--- Nodes the running pass has settled.
+	settled : integer
+	running : boolean
+	--- Reads the two end nodes of each road now and keeps them. Call it before the first command of the press.
+	prepare : function(self : RubCrosswalkPassState, edges : {integer})
+	--- Records the node of `spot` as touched. A node at the same position, rounded to 0.1 m, is kept once.
+	touch : function(self : RubCrosswalkPassState, spot : RubNodeSpot)
+	--- Records the two end nodes of the road `edge` (as read by `prepare`) as touched. Call it after a command upgraded the road.
+	touchRoad : function(self : RubCrosswalkPassState, edge : integer)
+	--- Waits for the settle time, then sends the crosswalk command of every touched junction, one after the other, waits once and
+	--- reads all of them back; the incomplete ones go into the next round. `onDone` is called once. When no touched node is a junction (fewer than 3 street segments) it is called at once, without the settle time.
+	run : function(self : RubCrosswalkPassState, env : RubCrosswalkEnv, onDone : function())
+	--- The touched nodes that the running pass has not settled yet; 0 when no pass runs.
+	unfinished : function(self : RubCrosswalkPassState) : integer
+end
+
+-- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/crosswalk_pass.tl" as RubCrosswalkPass
+global record RubCrosswalkPass
+	--- Seconds to wait for the jobs of other mods (Smart Lanes) before the first command, and between two rounds.
+	CROSSWALK_SETTLE_SECONDS : number
+	--- Seconds between the last command of a round and the read back of its nodes.
+	CROSSWALK_VERIFY_SECONDS : number
+	--- The most rounds of commands for one node.
+	CROSSWALK_ATTEMPTS : integer
+	--- A node with fewer street segments is no junction and is skipped.
+	MIN_STREETS_FOR_CROSSWALKS : integer
+	new : function() : RubCrosswalkPassState
 end
