@@ -3,3 +3,4 @@
 stdout*.txt
 .brooks-lint-history.json
 tests/.build/
+/kacsa_underground_hub/
