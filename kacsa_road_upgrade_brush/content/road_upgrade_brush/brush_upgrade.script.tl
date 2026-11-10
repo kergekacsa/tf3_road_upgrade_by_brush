@@ -203,7 +203,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-11-10 co"
+local BUILD <const> = "2026-11-10 cp"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -802,6 +802,37 @@ local function logNoTerrain(lmbDown : boolean)
 	end
 end
 
+-- The buttons of a controller: Cross (both actions) selects under the circle, Triangle moves the focus to the toolbar.
+local IA_PAD_SELECT <const> = "IA_APPLY"
+local IA_PAD_SELECT_ALT <const> = "IA_SELECT"
+local IA_PAD_OPTIONS <const> = "IA_OPTION2"
+-- Events of the construction menu for the gamepad focus. The first asks the menu to move the focus between the tool
+-- and the toolbar. The menu fires the second with the part that has the focus; FOCUS_TOOL is the tool.
+local EV_MENU_TOGGLE_TOOLBAR <const> = "constructionMenuToggleBottomBarFocus"
+local EV_MENU_FOCUS_MODE <const> = "constructionMenuChangeFocusMode"
+local FOCUS_TOOL <const> = "Action"
+-- One press of Cross can arrive through both actions and the Selector; a second report this soon after is ignored (seconds).
+local PAD_SELECT_MIN_GAP <const> = 0.15
+
+local function gamepadMode() : boolean
+	local ok, on = pcall(function() : boolean
+		return api.util.getInputMode() == api.type.enum.InputMode.Gamepad
+	end)
+	return ok and on == true
+end
+
+-- The focus target of a controller. Gamepad input actions reach the focused node and its ancestors, and the menu leaves
+-- the focus on the entry of the tool. This component takes the focus when it mounts, so the tool recipe above it gets
+-- the buttons.
+local PadFocus = react.RegisterRecipe("BrushUpgradePadFocus", function(_param : IRecipeParamWithMeta) : TreeNodeId
+	local selfRef = react.useSelfRef()
+	react.onMount(function()
+		local node = selfRef:get()
+		if node ~= nil then node:focus() end
+	end)
+	return nil
+end)
+
 local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	perf:wrap("action_render", function(param : ConstructionCustomActionParams<RubActionParam>) : TreeNodeId
 
@@ -846,6 +877,11 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	local refHlSet = react.useRef({}) as ReactRefT<{integer : boolean}>  -- read by the Selector filter
 	local refTruncLogged = react.useRef(nil) as ReactRefT<Selection> -- selection whose overlay cap was logged
 	local refUndergroundShown = react.useRef(false) as ReactRefT<boolean> -- the underground layer was added since the tool opened
+	local gamepadState = react.useState(gamepadMode()) as ReactStateT<boolean>
+	local layerUpState = react.useState(false) as ReactStateT<boolean>   -- the world layer of this instance is mounted
+	local refFocusMode = react.useRef(FOCUS_TOOL) as ReactRefT<string>   -- the part of the menu that has the gamepad focus
+	local refPadSelectAt = react.useRef(-PAD_SELECT_MIN_GAP) as ReactRefT<number> -- os.clock() of the last Cross press
+	local padRef = react.useNodeRef(PadFocus)
 	-- The latest params for the step/event callbacks (they may outlive this render's closure).
 	local refParam = react.useRef(param) as ReactRefT<ConstructionCustomActionParams<RubActionParam>>
 	-- A render of an instance that the menu no longer updates carries old params; while a newer instance passes the
@@ -1271,9 +1307,24 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		end
 	end
 
+	react.onEvent(EV_MENU_FOCUS_MODE, function(_name : string, payload : any)
+		local mode = payload ~= nil and payload as string or FOCUS_TOOL
+		if mode ~= refFocusMode:get() then logMsg("controller: focus mode " .. tostring(mode)) end
+		refFocusMode:set(mode)
+		-- The menu gives the focus back to the entry of the tool, so the focus target takes it again.
+		if mode == FOCUS_TOOL then
+			pcall(function()
+				local node = padRef:get()
+				if node ~= nil then node:focus() end
+			end)
+		end
+	end)
+
 	react.onStep(function()
 		commit.tick()
 		local tStep = perf:start()
+		local pad = gamepadMode()
+		if pad ~= gamepadState:old() then gamepadState:set(pad) end
 		local prm = refParam:get()
 		-- The newest instance is the one the menu keeps up to date, but after other tools were used the menu may keep
 		-- drawing the world layer of an older instance. Then the newest instance passes its state to the instance
@@ -1557,6 +1608,66 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		refParam:set(p as ConstructionCustomActionParams<RubActionParam>)
 	end
 
+	-- The start of a stroke: the press of the left button, or of Cross on a controller.
+	local function beginStroke()
+		local s = refSel:get()
+		if s ~= nil and s.phase == PHASE_COMMITTING then
+			-- Nothing new starts while a commit runs.
+			refLmbDown:set(false)
+			refSkipRelease:set(true)
+			return
+		end
+		refSkipRelease:set(false)
+		refLmbDown:set(true)
+		refResult:set(nil)
+		local erase = shiftHeld()
+		if s ~= nil and s.phase == PHASE_SELECTED then
+			-- Another stroke adds to the selection (or, with Shift, removes from it).
+			s.phase = PHASE_PAINTING
+			s.erasing = erase
+		else
+			-- New selection (the hover preview is dropped). A Shift stroke with nothing
+			-- selected has nothing to remove and ends empty.
+			local ns = newSelection(PHASE_PAINTING)
+			ns.erasing = erase
+			refSel:set(ns)
+		end
+		if erase then logMsg("erase stroke (Shift held)") end
+		-- The next step takes the stroke's first sample at the cursor.
+		refSample:set(nil)
+		bump()
+	end
+	-- The end of a stroke: the release of the left button.
+	local function endStroke()
+		local s = refSel:get()
+		local skipThis = refSkipRelease:get()
+		refSkipRelease:set(false)
+		refLmbDown:set(false)
+		if skipThis then
+			-- ignore: its press was cleared with RMB or came while a commit ran
+		elseif s ~= nil and s.phase == PHASE_PAINTING then
+			-- A plain click (released before a step sampled) still adds what is under the circle.
+			local cur = cursorState:old()
+			if refSample:get() == nil and cur ~= nil and s.erasing then
+				eraseSample(s, cur.x, cur.y, radiusState:old(), filtersState:old())
+			elseif refSample:get() == nil and cur ~= nil and not s.stroke.capped then
+				takeSample(s, cur.x, cur.y, radiusState:old(), filtersState:old())
+			end
+			finishStroke(s)
+		end
+	end
+	-- Cross on a controller: one stroke at the circle, like a click of the left button. With the erase modifier held
+	-- (R1) the roads under the circle leave the selection. Only the instance whose world layer is mounted acts.
+	local function padSelect(source : string)
+		if not layerOwner.isUp(refInstance:get()) or not refParam:get().isActive then return end
+		local now = os.clock()
+		if now - refPadSelectAt:get() < PAD_SELECT_MIN_GAP then return end
+		refPadSelectAt:set(now)
+		logMsg("controller: select (" .. source .. ")")
+		beginStroke()
+		endStroke()
+	end
+
 	local onMouse = function(e : Gui.Mouse.Event) : boolean
 		local tMouse = perf:start()
 		-- Only the Selector of a mounted layer receives mouse events, so an event marks the layer mounted (see layerOwner.mouse).
@@ -1600,47 +1711,9 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		local consume = isLmb and (e.type == T.Pressed or e.type == T.Released)
 
 		if isLmb and e.type == T.Pressed then
-			if s ~= nil and s.phase == PHASE_COMMITTING then
-				-- Nothing new starts while a commit runs.
-				refLmbDown:set(false)
-				refSkipRelease:set(true)
-			else
-				refSkipRelease:set(false)
-				refLmbDown:set(true)
-				refResult:set(nil)
-				local erase = shiftHeld()
-				if s ~= nil and s.phase == PHASE_SELECTED then
-					-- Another stroke adds to the selection (or, with Shift, removes from it).
-					s.phase = PHASE_PAINTING
-					s.erasing = erase
-				else
-					-- New selection (the hover preview is dropped). A Shift stroke with nothing
-					-- selected has nothing to remove and ends empty.
-					local ns = newSelection(PHASE_PAINTING)
-					ns.erasing = erase
-					refSel:set(ns)
-				end
-				if erase then logMsg("erase stroke (Shift held)") end
-				-- The next step takes the stroke's first sample at the cursor.
-				refSample:set(nil)
-				bump()
-			end
+			beginStroke()
 		elseif isLmb and e.type == T.Released then
-			local skipThis = refSkipRelease:get()
-			refSkipRelease:set(false)
-			refLmbDown:set(false)
-			if skipThis then
-				-- ignore: its press was cleared with RMB or came while a commit ran
-			elseif s ~= nil and s.phase == PHASE_PAINTING then
-				-- A plain click (released before a step sampled) still adds what is under the circle.
-				local cur = cursorState:old()
-				if refSample:get() == nil and cur ~= nil and s.erasing then
-					eraseSample(s, cur.x, cur.y, radiusState:old(), filtersState:old())
-				elseif refSample:get() == nil and cur ~= nil and not s.stroke.capped then
-					takeSample(s, cur.x, cur.y, radiusState:old(), filtersState:old())
-				end
-				finishStroke(s)
-			end
+			endStroke()
 		elseif isRmb and (e.type == T.Pressed or e.type == T.PressedOutside) then
 			-- RMB press: only remember where. RMB Pressed / Released never arrive here, only PressedOutside (press) and
 			-- Clicked (release): RMB is bound to the menu's back and cancel actions, which take the press before the Selector.
@@ -1734,6 +1807,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		-- left, which unmounts this layer. An unmount not followed by a mount within layerOwner.GONE_SECONDS clears the
 		-- selection (here or in onStep).
 		react.onMount(function()
+			pcall(function() layerUpState:set(true) end)
 			pcall(function()
 				local wasUp, downFor, gone = layerOwner.mount(refInstance:get(), os.clock(), takeParam)
 				layerEventMsg(string.format("instance #%d: world layer mounted (flag was %s, unmounted %s s before)", refInstance:get(),
@@ -1746,6 +1820,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			end)
 		end)
 		react.onUnmount(function()
+			pcall(function() layerUpState:set(false) end)
 			pcall(function()
 				layerOwner.unmount(refInstance:get(), os.clock())
 				layerEventMsg(string.format("instance #%d: world layer unmounted", refInstance:get()))
@@ -1793,8 +1868,9 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 					if hl.HOVER_ONLY_HIGHLIGHTED then return refHlSet:get()[entity] == true end
 					return api.engine.entityExists(entity)
 				end,
-				-- Consume the click so no entity window opens.
+				-- Consume the click so no entity window opens. On a controller, Cross over a highlighted entity arrives here.
 				onSelect = function(_e : Engine.Entity, _i : {integer}, _d : Gui.SelectionDetails) : boolean
+					if gamepadState:old() then padSelect("selector") end
 					return true
 				end,
 				onProcessMouseEvent = onMouse,
@@ -1908,8 +1984,8 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 
 		local descriptor = builtin.ActionDescriptor{
 			tool = "brush-upgrade-tool",
-			crosshair = false,
-			terrainCirclePolicy = "Never",
+			crosshair = gamepadState:old(),
+			terrainCirclePolicy = gamepadState:old() and "FocusSelection" or "Never",
 			highlightedEntities = tinted,
 			-- Back (ESC) clears the selection first; otherwise it leaves the tool.
 			onBack = function()
@@ -1932,18 +2008,39 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	param.setActionFn(actionFn, "BrushUpgradeAction")
 	-- These actions share buttons with the navigation of the menu (constructOpt1 and constructOpt2 are dpright and
 	-- dpleft, like IA_NAV_RIGHT and IA_NAV_LEFT). An entry that is not active MUST NOT register them.
-	react.useInputAction("IA_UNDERGOUND_MODE_TOGGLE", react.iaHandler(toggleUnderground))
-	react.useInputAction(IA_RADIUS_GROW, react.iaHandler(function() stepRadius(1) end, nil, nil, true))
-	react.useInputAction(IA_RADIUS_SHRINK, react.iaHandler(function() stepRadius(-1) end, nil, nil, true))
+	local pad = gamepadState:old()
+	-- On a controller the buttons belong to the toolbar while it has the focus of the menu.
+	local function toolHasButtons() : Gui.InputAction.InputActionState
+		local mine = not pad or refFocusMode:get() == FOCUS_TOOL
+		return mine and api.gui.inputAction.InputActionState.Enabled or api.gui.inputAction.InputActionState.Disabled
+	end
+	react.useInputAction("IA_UNDERGOUND_MODE_TOGGLE", react.iaHandler(toggleUnderground, toolHasButtons))
+	react.useInputAction(IA_RADIUS_GROW, react.iaHandler(function() stepRadius(1) end, toolHasButtons, _("Brush radius"), true))
+	react.useInputAction(IA_RADIUS_SHRINK, react.iaHandler(function() stepRadius(-1) end, toolHasButtons, _("Brush radius"), true))
 	react.useInputAction(IA_ENTER_NAV, react.iaHandler(function() upgradeOnEnter(IA_ENTER_NAV) end))
 	react.useInputAction(IA_ENTER_TEXT, react.iaHandler(function() upgradeOnEnter(IA_ENTER_TEXT) end))
+	if pad then
+		react.useInputAction(IA_PAD_SELECT, react.iaHandler(function() padSelect(IA_PAD_SELECT) end, toolHasButtons, _("Select")))
+		react.useInputAction(IA_PAD_SELECT_ALT, react.iaHandler(function() padSelect(IA_PAD_SELECT_ALT) end, toolHasButtons))
+		-- The base tools get this action from the ConstructionAction of the game, which a custom action does not have.
+		react.useInputAction(IA_PAD_OPTIONS, react.iaHandler(function()
+			logMsg("controller: focus to the toolbar")
+			react.fireEvent(nil, EV_MENU_TOGGLE_TOOLBAR)
+		end, toolHasButtons, _("Options")))
+	end
 	-- ESC: while something is selected it clears the selection. Otherwise, in mouse mode, it falls through and closes
 	-- the construction window. useInputAction may be conditional here.
 	if (hasPending() or isCommitting()) and type(reactAny.useInputAction) == "function" and type(reactAny.iaHandler) == "function" then
 		react.useInputAction("IA_MENU_BACK", react.iaHandler(function()
 			logEsc("IA_MENU_BACK")
 			if isCommitting() then cancelUpgrade() else cancelPending("Esc") end
-		end))
+		end, toolHasButtons))
+	end
+	-- On a controller the focus target mounts with the world layer, after the menu has put the focus on the entry.
+	if pad and layerUpState:old() then
+		return builtin.BoxLayout{
+			children = { PadFocus(react.ref(padRef), { meta = { forceFocusable = true } }) },
+		}
 	end
 	return nil
 end))

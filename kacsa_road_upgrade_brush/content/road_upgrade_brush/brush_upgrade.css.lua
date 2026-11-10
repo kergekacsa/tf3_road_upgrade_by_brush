@@ -1,7 +1,7 @@
 -- Based on 'Bulk Bulldozer' by square17 (mod.io 6434884).
 -- The construction menu draws every toolbar param as a ToggleButton. The status chip is a disabled one-value Button
 -- param (brush_upgrade.script.tl KEY_STATUS). Its group id becomes a class of the group's R::Component
--- ("param-group,<group>"). Every rule here is scoped under that class (GROUP_INFO = "sq-tool-info", shared with
+-- ("param-group,<group>"). Every toolbar rule here is scoped under that class (GROUP_INFO = "sq-tool-info", shared with
 -- Smart Lanes). Class names hold only letters, digits and dashes.
 local ssu = require "::/gui/main/stylesheetutil.lua"
 
@@ -55,6 +55,18 @@ function data()
 			})
 		end
 	end
+
+	-- The button hints of a controller for the tool recipe (BrushUpgradeAction). The input action handlers of the
+	-- recipe give the texts. This rule is not part of the shared block above.
+	a("!input-controller R::BrushUpgradeAction", {
+		actionPromptList = {
+			{ ia = "IA_APPLY", sortKey = "brush-upgrade-1" },
+			{ ia = "IA_OPTION2", sortKey = "brush-upgrade-2" },
+			{ ia = "constructOpt2", sortKey = "brush-upgrade-3a" },
+			{ ia = "constructOpt1", sortKey = "brush-upgrade-3b" },
+			{ ia = "IA_MENU_BACK", sortKey = "brush-upgrade-4" },
+		},
+	})
 
 	return result
 end
