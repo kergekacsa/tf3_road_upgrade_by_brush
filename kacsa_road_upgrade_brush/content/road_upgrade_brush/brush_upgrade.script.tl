@@ -203,7 +203,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-11-02 cn"
+local BUILD <const> = "2026-11-10 co"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -854,7 +854,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	-- The game's shortcut for the underground view (G). The game registers it only for its own builder tools.
 	-- The view switches at once; the toolbar button follows when the menu's API is at hand.
 	local syncFilters : function(string)
-	react.useInputAction("IA_UNDERGOUND_MODE_TOGGLE", react.iaHandler(function()
+	local function toggleUnderground()
 		if not refParam:get().isActive then return end
 		local now = os.clock()
 		local last = g_lastShortcut
@@ -876,7 +876,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 				viaMenu and "changed" or "not reachable"))
 		end
 		syncFilters("shortcut")
-	end))
+	end
 
 	-- One step along brush.RADII. Only the instance whose world layer is mounted acts; a held key repeats.
 	local function stepRadius(direction : integer)
@@ -897,8 +897,6 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		end
 		if debugLog() then logMsg(string.format("radius key: %d m, toolbar slider %s", math.floor(r), toolbar and "set" or "not reachable")) end
 	end
-	react.useInputAction(IA_RADIUS_GROW, react.iaHandler(function() stepRadius(1) end, nil, nil, true))
-	react.useInputAction(IA_RADIUS_SHRINK, react.iaHandler(function() stepRadius(-1) end, nil, nil, true))
 
 	local function bump()
 		refVersion:set(refVersion:get() + 1)
@@ -1168,8 +1166,6 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		upgradeMsg("upgrade", "Enter (" .. action .. "): upgrade")
 		upgradeSelection()
 	end
-	react.useInputAction(IA_ENTER_NAV, react.iaHandler(function() upgradeOnEnter(IA_ENTER_NAV) end))
-	react.useInputAction(IA_ENTER_TEXT, react.iaHandler(function() upgradeOnEnter(IA_ENTER_TEXT) end))
 
 	react.onEvent(EV_RADIUS, function(_name : string, payload : any)
 		local m = (payload as RadiusEvent).meters
@@ -1934,6 +1930,13 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 
 	if not param.isActive then return nil end
 	param.setActionFn(actionFn, "BrushUpgradeAction")
+	-- These actions share buttons with the navigation of the menu (constructOpt1 and constructOpt2 are dpright and
+	-- dpleft, like IA_NAV_RIGHT and IA_NAV_LEFT). An entry that is not active MUST NOT register them.
+	react.useInputAction("IA_UNDERGOUND_MODE_TOGGLE", react.iaHandler(toggleUnderground))
+	react.useInputAction(IA_RADIUS_GROW, react.iaHandler(function() stepRadius(1) end, nil, nil, true))
+	react.useInputAction(IA_RADIUS_SHRINK, react.iaHandler(function() stepRadius(-1) end, nil, nil, true))
+	react.useInputAction(IA_ENTER_NAV, react.iaHandler(function() upgradeOnEnter(IA_ENTER_NAV) end))
+	react.useInputAction(IA_ENTER_TEXT, react.iaHandler(function() upgradeOnEnter(IA_ENTER_TEXT) end))
 	-- ESC: while something is selected it clears the selection. Otherwise, in mouse mode, it falls through and closes
 	-- the construction window. useInputAction may be conditional here.
 	if (hasPending() or isCommitting()) and type(reactAny.useInputAction) == "function" and type(reactAny.iaHandler) == "function" then
