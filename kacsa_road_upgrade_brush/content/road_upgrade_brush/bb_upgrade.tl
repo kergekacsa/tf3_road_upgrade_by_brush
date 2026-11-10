@@ -299,6 +299,155 @@ local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
 	notes[#notes + 1] = verified and "edit verified" or "EDIT NOT VERIFIED, not sent"
 	return verified, "edit: " .. table.concat(notes, ", ")
 end
+
+-- The positions of the tram lanes of a street at one of its end nodes, counted as the lanes of a LaneConnection: zero-based,
+-- from left to right when looking from the node along the street.
+local record TramLanes
+	incoming : {integer}
+	outgoing : {integer}
+end
+
+-- A lane connection for the tram at a node: from a lane of one street into a lane of another street.
+local record TramRoute
+	node : integer
+	from : integer
+	fromLane : integer
+	to : integer
+	toLane : integer
+end
+
+local function tramLanesAt(comp : Engine.Component.BaseEdge, node : integer) : TramLanes
+	local tram = modeNumber(api.type["enum"].TransportMode.TRAM)
+	local startsAtNode = comp.node0 == node
+	local lanes = comp.laneConfigs or {}
+	local found : TramLanes = { incoming = {}, outgoing = {} }
+	for position = 1, #lanes do
+		local lane = lanes[startsAtNode and position or #lanes + 1 - position]
+		if modeSet(lane)[tram] then
+			local side = (lane.forward == true) == startsAtNode and found.outgoing or found.incoming
+			side[#side + 1] = position - 1
+		end
+	end
+	return found
+end
+
+-- api.type.LaneConnection exists in the game but not in its Teal definitions. The game takes only its own objects in the list
+-- of a node config.
+local function newTramConnection(route : TramRoute) : LaneConnection
+	local factory = (api.type as {string : any})["LaneConnection"] as {string : function() : LaneConnection}
+	local connection = factory["new"]()
+	connection.segment0 = route.from
+	connection.lane0 = route.fromLane
+	connection.segment1 = route.to
+	connection.lane1 = route.toLane
+	connection.withRoad = false
+	connection.withTram = true
+	return connection
+end
+
+local function connectionOf(connections : {LaneConnection}, route : TramRoute) : LaneConnection
+	for _, c in ipairs(connections) do
+		if c.segment0 == route.from and c.lane0 == route.fromLane and c.segment1 == route.to and c.lane1 == route.toLane then return c end
+	end
+	return nil
+end
+
+-- The tram routes between an added segment and every other street of the node, in both directions: from the incoming tram
+-- lane of the one into the outgoing tram lane of the other. The second value counts the pairs left out because a street has
+-- several tram lanes in that direction. It reads the BASE_EDGE of the streets that the connections name.
+local function tramRoutesAt(node : integer, connections : {LaneConnection}, addedSegments : {Proposal.SegmentAndEntity}) : {TramRoute}, integer
+	local isAdded : {integer : boolean} = {}
+	local lanes : {integer : TramLanes} = {}
+	local streets : {integer} = {}
+	for _, segment in ipairs(addedSegments) do
+		isAdded[segment.entity] = true
+		local comp = segment.comp
+		if comp.node0 == node or comp.node1 == node then
+			lanes[segment.entity] = tramLanesAt(comp, node)
+			streets[#streets + 1] = segment.entity
+		end
+	end
+	for _, connection in ipairs(connections) do
+		for _, street in ipairs({ connection.segment0, connection.segment1 }) do
+			if lanes[street] == nil then
+				lanes[street] = tramLanesAt(api.engine.getComponent(street, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge, node)
+				streets[#streets + 1] = street
+			end
+		end
+	end
+	local routes : {TramRoute} = {}
+	local leftOut = 0
+	for _, from in ipairs(streets) do
+		for _, to in ipairs(streets) do
+			local incoming, outgoing = lanes[from].incoming, lanes[to].outgoing
+			if from ~= to and (isAdded[from] or isAdded[to]) and #incoming > 0 and #outgoing > 0 then
+				if #incoming > 1 or #outgoing > 1 then
+					leftOut = leftOut + 1
+				else
+					routes[#routes + 1] = { node = node, from = from, fromLane = incoming[1], to = to, toLane = outgoing[1] }
+				end
+			end
+		end
+	end
+	return routes, leftOut
+end
+
+-- The tram routes of the added segments in the node configs of the proposal. replaceSegment makes these configs from the lanes
+-- of the template, so the connections of an added segment carry no tram. Every route of tramRoutesAt gets the tram flag on
+-- its connection, or a connection for the tram alone when the config has none. The result is false when a route does not
+-- read back from the proposal. Such a proposal MUST NOT be sent.
+local function applyTramConnections(p : Proposal) : boolean, string
+	local street = p.proposal
+	local configs = street.nodeConfigsToAdd or {}
+	local meant : {TramRoute} = {}
+	local set, added, leftOut = 0, 0, 0
+	for _, config in ipairs(configs) do
+		local comp = config.comp
+		local connections : {LaneConnection} = {}
+		for i, connection in ipairs(comp.laneConnections or {}) do connections[i] = connection end
+		local routes, skipped = tramRoutesAt(config.entity, connections, street.addedSegments)
+		leftOut = leftOut + skipped
+		for _, route in ipairs(routes) do
+			local connection = connectionOf(connections, route)
+			if connection == nil then
+				connections[#connections + 1] = newTramConnection(route)
+				added = added + 1
+			elseif not connection.withTram then
+				connection.withTram = true
+				set = set + 1
+			end
+			meant[#meant + 1] = route
+		end
+		if #routes > 0 then
+			comp.laneConnections = connections
+			config.comp = comp
+		end
+	end
+	if #meant > 0 then
+		street.nodeConfigsToAdd = configs
+		p.proposal = street
+	end
+
+	local verified = true
+	local notes : {string} = { string.format("%d set, %d added, %d left out", set, added, leftOut) }
+	local readBack = p.proposal.nodeConfigsToAdd or {}
+	for _, route in ipairs(meant) do
+		local found = false
+		for _, config in ipairs(readBack) do
+			if config.entity == route.node then
+				local connection = connectionOf(config.comp.laneConnections or {}, route)
+				found = found or (connection ~= nil and connection.withTram == true)
+			end
+		end
+		if not found then
+			verified = false
+			notes[#notes + 1] = string.format("node %d: %d lane %d -> %d lane %d reads back without the tram", route.node, route.from,
+				route.fromLane, route.to, route.toLane)
+		end
+	end
+	notes[#notes + 1] = verified and "verified" or "TRAM CONNECTIONS NOT VERIFIED, not sent"
+	return verified, "tram connections: " .. table.concat(notes, ", ")
+end
 local ALL_MODE_NAMES : {string} = {
 	"PERSON", "CARGO", "CAR", "BUS", "TRUCK", "TRAM", "ELECTRIC_TRAM", "TRAIN", "ELECTRIC_TRAIN", "AIRCRAFT", "SHIP",
 	"SMALL_AIRCRAFT", "SMALL_SHIP", "HELICOPTER", "TRAM_TRACK", "ELECTRIC_TRAM_TRACK",
@@ -379,6 +528,11 @@ local function proposalOf(edge : integer, template : string, decorations : {{int
 			local okE, note = applyExtras(p, extras)
 			summary = summary .. ", " .. note
 			if not okE then unsafe = true end
+			if okE and extras.tram then
+				local okT, tramNote = applyTramConnections(p)
+				summary = summary .. ", " .. tramNote
+				if not okT then unsafe = true end
+			end
 		end
 		return nil
 	end)

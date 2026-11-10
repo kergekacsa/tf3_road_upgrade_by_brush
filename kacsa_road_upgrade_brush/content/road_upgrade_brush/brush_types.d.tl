@@ -137,7 +137,7 @@ end
 global record RubProbePress
 	--- The road `edge` starts attempt number `attempt` (0 = first pass).
 	road : function(edge : integer, attempt : integer)
-	--- Logs the line of the road before its command. `p` is nil when no proposal was built. `commands` is the number of commands sent so far.
+	--- Logs the line of the road before its command: the old road, the first added segment and the node configs of `p`. `p` is nil when no proposal was built. `commands` is the number of commands sent so far.
 	proposal : function(edge : integer, p : Proposal, commands : integer)
 	--- Logs the road found at the end points of `edge`, with the text that `state` returns appended. `state` runs only when the edge has a watch.
 	after : function(edge : integer, state : function() : string)

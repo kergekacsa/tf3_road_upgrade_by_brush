@@ -3,8 +3,8 @@
 -- list of lot houses that the commit puts in the removal list of a retry. An empty list means that nothing is put in.
 -- The probe logs what the proposal of a construction tool contains while the cursor is over a road (at most once per
 -- MIN_INTERVAL seconds, only a changed line, at most MAX_LINES per session), and for each road of an upgrade the old
--- road, the added segment, and the road after the command (at most PRESS_LINE_CAP lines per press and
--- SESSION_LINE_CAP per session).
+-- road, the added segment, the node configs of the proposal, and the road after the command (at most PRESS_LINE_CAP
+-- lines per press and SESSION_LINE_CAP per session).
 
 local brush = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush.tl" as RubBrush
 
@@ -20,6 +20,8 @@ local MAX_LINES <const> = 60
 -- Calls of `describe` (it reads components of the game) per session, whether or not they give a new line.
 local MAX_DESCRIBE_CALLS <const> = 200
 local MAX_IDS <const> = 12
+-- Lane connections listed per node config in the line of a road.
+local MAX_CONNECTIONS <const> = 48
 local MIN_INTERVAL <const> = 1.0
 local MAX_TRACE <const> = 5
 local PRESS_LINE_CAP <const> = 800
@@ -324,6 +326,36 @@ local function before(edge : integer, attempt : integer) : RubProbeWatch
 	return watch
 end
 
+-- The node configs that the proposal adds. Per node: the number of lane connections, the number with the tram flag, and
+-- the connections of the added segments as "segment lane>segment lane" with "r" (road) and "t" (tram), at most
+-- MAX_CONNECTIONS of them.
+local function nodeConfigsText(street : Proposal.StreetProposal) : string
+	local added : {integer : boolean} = {}
+	for _, s in ipairs(street.addedSegments or {}) do
+		if s.entity ~= nil then added[s.entity] = true end
+	end
+	local nodes : {string} = {}
+	for _, config in ipairs(street.nodeConfigsToAdd or {}) do
+		local connections = config.comp.laneConnections or {}
+		local withTram = 0
+		local own : {string} = {}
+		for _, c in ipairs(connections) do
+			if c.withTram then withTram = withTram + 1 end
+			if added[c.segment0] or added[c.segment1] then
+				if #own < MAX_CONNECTIONS then
+					own[#own + 1] = string.format("%s %s>%s %s %s%s", tostring(c.segment0), tostring(c.lane0), tostring(c.segment1),
+						tostring(c.lane1), c.withRoad and "r" or "", c.withTram and "t" or "")
+				elseif #own == MAX_CONNECTIONS then
+					own[#own + 1] = "..."
+				end
+			end
+		end
+		nodes[#nodes + 1] = string.format("node %s: %d connections, %d with tram, of the added segments [%s]", tostring(config.entity),
+			#connections, withTram, table.concat(own, ", "))
+	end
+	return string.format("%d added, removed %s; %s", #nodes, idList(street.nodeConfigsToRemove as {integer}), table.concat(nodes, " | "))
+end
+
 -- Writes the one line of the road before its command. `p` is nil when no proposal was built. `commands` is the number of
 -- commands sent since the old road was read.
 local function proposal(watch : RubProbeWatch, p : Proposal, commands : integer)
@@ -333,8 +365,13 @@ local function proposal(watch : RubProbeWatch, p : Proposal, commands : integer)
 		local added = p.proposal.addedSegments
 		return string.format("(%d in the proposal) %s", #added, #added > 0 and segmentText(added[1]) or "none")
 	end)
-	line(string.format("edge %d attempt %d before (old road read at press start, %d commands sent since): old road: %s; added segment %s",
-		watch.edge, watch.attempt, commands, watch.oldText, ok and addedText or ("unreadable: " .. tostring(addedText))))
+	local configsText = ""
+	if p ~= nil then
+		local okConfigs, text = pcall(nodeConfigsText, p.proposal)
+		configsText = "; node configs: " .. (okConfigs and text or ("unreadable: " .. tostring(text)))
+	end
+	line(string.format("edge %d attempt %d before (old road read at press start, %d commands sent since): old road: %s; added segment %s%s",
+		watch.edge, watch.attempt, commands, watch.oldText, ok and addedText or ("unreadable: " .. tostring(addedText)), configsText))
 end
 
 -- `state` is appended to the line, to show the game speed and update count at the read.

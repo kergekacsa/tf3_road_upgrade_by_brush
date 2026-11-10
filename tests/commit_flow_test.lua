@@ -74,10 +74,11 @@ local CATENARY_LANES = {
 
 -- Lanes as the game hands them out: the transport modes are read as a table keyed by the mode numbers, and written as a list
 -- of 16 booleans counted from 1. `shift` makes the stub store a written list one mode too high, as a game that misreads it.
+-- The field `forward` of a mode list is the direction of the lane.
 local function makeLanes(layout, shift)
   local lanes = {}
   for i, modeList in ipairs(layout) do
-    local data = { transportModes = {} }
+    local data = { transportModes = {}, forward = modeList.forward }
     for _, mode in ipairs(modeList) do data.transportModes[mode] = true end
     lanes[i] = setmetatable({}, {
       __index = data,
@@ -128,9 +129,43 @@ local function newComp(template, layout, shift, edge)
   }
 end
 
+local function copyConnections(list)
+  local out = {}
+  for i, c in ipairs(list) do
+    out[i] = { segment0 = c.segment0, lane0 = c.lane0, segment1 = c.segment1, lane1 = c.lane1, withRoad = c.withRoad, withTram = c.withTram }
+  end
+  return out
+end
+
+-- With world.nodeConnections[node] (a list of { from, fromLane, to, toLane, withRoad, withTram }) every proposal carries a
+-- config for both end nodes with these lane connections. The config hands out copies of its connections and keeps a written
+-- list, as the game does. world.dropConnectionWrite makes it ignore a written list.
+local function connectionConfigsOf(comp)
+  local configs = {}
+  for i, node in ipairs({ comp.node0, comp.node1 }) do
+    local stored = {}
+    for j, c in ipairs(world.nodeConnections[node] or {}) do
+      stored[j] = { segment0 = c[1], lane0 = c[2], segment1 = c[3], lane1 = c[4], withRoad = c[5], withTram = c[6] }
+    end
+    local data = { crosswalks = {} }
+    configs[i] = { entity = node, comp = setmetatable({}, {
+      __index = function(_, key)
+        if key == "laneConnections" then return copyConnections(stored) end
+        return data[key]
+      end,
+      __newindex = function(_, key, value)
+        if key ~= "laneConnections" then data[key] = value; return end
+        if not world.dropConnectionWrite then stored = copyConnections(value) end
+      end,
+    }) }
+  end
+  return configs
+end
+
 -- With world.nodeConfigs every proposal of replaceSegment carries a config for both end nodes, naming the new segment -1 and the
 -- road that it replaces.
 local function nodeConfigsOf(edge, comp)
+  if world.nodeConnections then return connectionConfigsOf(comp) end
   if not world.nodeConfigs then return nil end
   local configs = {}
   for i, node in ipairs({ comp.node0, comp.node1 }) do
@@ -263,6 +298,7 @@ _G.api = {
     Context = { new = function() return {} end },
     SimpleProposal = { new = function() return { streetProposal = {} } end },
     BaseNodeLaneConnectionAndEntity = { new = function() return {} end },
+    LaneConnection = { new = function() return {} end },
   },
   res = {
     streetTemplateRep = {
@@ -353,7 +389,8 @@ _G.api = {
       for i, config in ipairs(p.proposal.nodeConfigsToAdd or {}) do
         local first = config.comp.laneConnections[1]
         configs[i] = { entity = config.entity, connections = #config.comp.laneConnections, crosswalks = #config.comp.crosswalks,
-          segment0 = first and first.segment0 or nil, crosswalkIds = copyList(config.comp.crosswalks) }
+          segment0 = first and first.segment0 or nil, crosswalkIds = copyList(config.comp.crosswalks),
+          laneConnections = copyConnections(config.comp.laneConnections) }
       end
       return { kind = "build", edge = p.edge, force = force, toRemove = copyList(p.toRemove), removedSegments = removedSegments,
         addedSegments = #p.proposal.addedSegments, linesBefore = #world.lines, configs = configs, clock = world.clock }
@@ -448,6 +485,7 @@ local function press(options)
   world.abortBeforeBuild = options.abortBeforeBuild
   world.throwInProbe = options.throwInProbe
   world.nodeConfigs, world.noStreetOnCall = options.nodeConfigs == true, options.noStreetOnCall or {}
+  world.nodeConnections, world.dropConnectionWrite = options.nodeConnections, options.dropConnectionWrite == true
   world.inertProbe = options.inertProbe == true
   world.inProbeFunction = nil
   world.descriptions = options.descriptions or {}
@@ -1258,6 +1296,82 @@ local shifted = lanePress(extrasOf({ busLane = true }), { laneShift = 1 })
 check("lanes written one mode off: no command is sent and both roads fail with the extras reason",
   #shifted.builds == 0 and #shifted.result.failed == 2 and shifted.result.reasons["bus lane or lock could not be set"] == 2, text(shifted.commands))
 check("lanes written one mode off: the log says the edit is not verified", count(shifted.lines, function(l) return contains(l, "EDIT NOT VERIFIED") end) >= 1)
+
+-- The tram connections of the added segment in the node configs of the proposal. Road 1 runs from node 10 to node 11, where
+-- the roads 5 and 6 meet it. In every road the lane at position 1 (seen from node 11) is the incoming tram lane and the lane
+-- at position 2 the outgoing one.
+do
+local VEHICLE = { MODE.CAR, MODE.BUS, MODE.TRUCK }
+local VEHICLE_TRAM = { MODE.CAR, MODE.BUS, MODE.TRUCK, MODE.TRAM }
+local function directed(modeList, forward)
+  local lane = { forward = forward }
+  for i, mode in ipairs(modeList) do lane[i] = mode end
+  return lane
+end
+local SMALL_PLAIN = { directed({ MODE.PERSON }, false), directed(VEHICLE, false), directed(VEHICLE, true), directed({ MODE.PERSON }, true) }
+local SMALL_TRAM = { directed({ MODE.PERSON }, false), directed(VEHICLE_TRAM, false), directed(VEHICLE_TRAM, true), directed({ MODE.PERSON }, true) }
+local WIDE_TRAM = { directed({ MODE.PERSON }, false), directed(VEHICLE_TRAM, false), directed(VEHICLE_TRAM, false),
+  directed(VEHICLE_TRAM, true), directed(VEHICLE_TRAM, true), directed({ MODE.PERSON }, true) }
+local JUNCTION_NODES = { [1] = { 10, 11 }, [5] = { 11, 12 }, [6] = { 13, 11 } }
+local function junctionConnections()
+  return { [11] = { { -1, 1, 5, 2, true, false }, { 5, 1, -1, 2, true, false }, { 5, 1, 6, 2, true, true }, { 6, 1, 5, 2, true, true } } }
+end
+local function tramPress(extras, more)
+  local options = { option = 2, edges = { 1 }, extras = extras, roadLanes = SMALL_TRAM, proposalLanes = SMALL_PLAIN, templateLanes = SMALL_PLAIN,
+    edgeNodes = JUNCTION_NODES, nodeConnections = junctionConnections() }
+  for key, value in pairs(more or {}) do options[key] = value end
+  return press(options)
+end
+local function connectionsAt(run, node)
+  for _, config in ipairs(run.builds[1] and run.builds[1].configs or {}) do
+    if config.entity == node then return config.laneConnections end
+  end
+  return {}
+end
+local function tramRoute(connections, from, fromLane, to, toLane)
+  for _, c in ipairs(connections) do
+    if c.segment0 == from and c.lane0 == fromLane and c.segment1 == to and c.lane1 == toLane then return c end
+  end
+  return nil
+end
+local function isTramOnly(c) return c ~= nil and c.withTram == true and c.withRoad == false end
+local function isRoadAndTram(c) return c ~= nil and c.withTram == true and c.withRoad == true end
+
+local tramJunction = tramPress(extrasOf({ tram = true }))
+local junction = connectionsAt(tramJunction, 11)
+check("tram connections: the road is upgraded", tramJunction.result.removed == 1 and #tramJunction.result.failed == 0 and #tramJunction.builds == 1)
+check("tram connections: a connection between the tram lanes of the new road and a neighbour gets the tram flag and keeps the road flag",
+  isRoadAndTram(tramRoute(junction, -1, 1, 5, 2)) and isRoadAndTram(tramRoute(junction, 5, 1, -1, 2)))
+check("tram connections: a missing connection between the tram lanes is added for the tram alone",
+  #junction == 6 and isTramOnly(tramRoute(junction, -1, 1, 6, 2)) and isTramOnly(tramRoute(junction, 6, 1, -1, 2)), #junction)
+check("tram connections: the connections between the other roads stay as they were",
+  isRoadAndTram(tramRoute(junction, 5, 1, 6, 2)) and isRoadAndTram(tramRoute(junction, 6, 1, 5, 2)))
+check("tram connections: a node with no other road gets no connection", #connectionsAt(tramJunction, 10) == 0)
+check("tram connections: the log names the counts and that they are verified",
+  count(tramJunction.lines, function(l) return contains(l, "tram connections: 2 set, 2 added, 0 left out, verified") end) == 1, text(tramJunction.lines))
+
+local paused = tramPress(extrasOf({ tram = true }), { speed = 0 })
+check("tram connections: in a paused game the lanes of the neighbour roads are read outside every command callback",
+  count(paused.allReads, function(r) return r == "BASE_EDGE 5" or r == "BASE_EDGE 6" end) == 2
+  and count(paused.callbackReads, function(r) return r == "BASE_EDGE 5" or r == "BASE_EDGE 6" end) == 0, text(paused.callbackReads))
+
+local noTram = tramPress(extrasOf({ busLane = true }))
+check("tram connections: an upgrade without the tram track leaves the node configs as they are",
+  #noTram.builds == 1 and #connectionsAt(noTram, 11) == 4 and not isRoadAndTram(tramRoute(connectionsAt(noTram, 11), -1, 1, 5, 2))
+  and count(noTram.lines, function(l) return contains(l, "tram connections") end) == 0)
+
+local wide = tramPress(extrasOf({ tram = true }), { roadLanesFor = { [6] = WIDE_TRAM } })
+local wideJunction = connectionsAt(wide, 11)
+check("tram connections: a neighbour with several tram lanes per direction is left out, the others are connected",
+  #wide.builds == 1 and #wideJunction == 4 and isRoadAndTram(tramRoute(wideJunction, -1, 1, 5, 2))
+  and count(wide.lines, function(l) return contains(l, "tram connections: 2 set, 0 added, 2 left out, verified") end) == 1, text(wide.lines))
+
+local dropped = tramPress(extrasOf({ tram = true }), { dropConnectionWrite = true })
+check("tram connections not taken by the proposal: no command is sent and the road fails with the extras reason",
+  #dropped.builds == 0 and #dropped.result.failed == 1 and dropped.result.reasons["bus lane or lock could not be set"] == 1, text(dropped.commands))
+check("tram connections not taken by the proposal: the log says so",
+  count(dropped.lines, function(l) return contains(l, "TRAM CONNECTIONS NOT VERIFIED") end) >= 1)
+end
 
 -- Whether a road already is what the template and the extras make of it, and which extras a road carries
 world.templateLanes = PLAIN_LANES

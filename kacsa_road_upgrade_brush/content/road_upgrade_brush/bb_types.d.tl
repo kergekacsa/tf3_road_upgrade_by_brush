@@ -319,6 +319,7 @@ global record RubCommit
 	--- that already is the target is left alone; a road whose command fails is tried again, twice, after the
 	--- others.
 	--- `extras` are the bus lane, tram track, catenary and lock of Road Upgrade All in One; a road that already has them (and the template) is left alone.
+	--- With the tram track, the node configs of each proposal get the tram connections between the new road and the other streets of its end nodes; a street with several tram lanes per direction is left out.
 	--- `onRoad` runs each time a road is done in the current pass: ok when it was upgraded, was already the target, or was
 	--- dropped by the hard rules; not ok when its command failed. It gets the road, ok, the number of roads done in this
 	--- pass, the number of roads in this pass, and the pass (0 = first, 1 and 2 = retries). At the start of a retry pass it

@@ -132,6 +132,37 @@ check("on: the line has lock, decorations and lanes of the old road",
 check("on: the line has no parcels", not contains(logged[1], "parcel"))
 check("on: the line shows the owner of the old road", contains(logged[1], "owner 5"))
 check("on: the line has the added segment", contains(logged[1], "added segment (1 in the proposal)") and contains(logged[1], "lanes [>2+3]"))
+check("on: a proposal without node configs says so", contains(logged[1], "node configs: 0 added, removed 0 []"), logged[1])
+
+-- The node configs of the proposal
+local function connection(from, fromLane, to, toLane, withRoad, withTram)
+  return { segment0 = from, lane0 = fromLane, segment1 = to, lane1 = toLane, withRoad = withRoad, withTram = withTram }
+end
+local configProposal = { proposal = {
+  addedSegments = { { entity = -1, comp = proposal.proposal.addedSegments[1].comp } },
+  nodeConfigsToRemove = { 70 },
+  nodeConfigsToAdd = { { entity = 70, comp = { laneConnections = {
+    connection(-1, 1, 8, 2, true, false), connection(8, 1, -1, 2, true, true), connection(8, 1, 9, 2, false, true), connection(9, 1, 8, 2, true, false),
+  } } } },
+} }
+reset()
+handle.proposal(1, configProposal, 0)
+check("node configs: the line names the node, its connections and those with the tram flag",
+  #logged == 1 and contains(logged[1], "node configs: 1 added, removed 1 [70]; node 70: 4 connections, 2 with tram"), logged[1])
+check("node configs: only the connections of the added segment are listed, with the road and tram flags",
+  contains(logged[1], "of the added segments [-1 1>8 2 r, 8 1>-1 2 rt]"), logged[1])
+local manyConnections = {}
+for i = 1, 50 do manyConnections[i] = connection(-1, 1, 8, i, true, false) end
+configProposal.proposal.nodeConfigsToAdd[1].comp.laneConnections = manyConnections
+reset()
+handle.proposal(1, configProposal, 0)
+local _, listed = logged[1]:gsub("%-1 1>8 %d+ r", "")
+check("node configs: at most 48 connections are listed, then a mark", listed == 48 and contains(logged[1], "r, ...]"), listed)
+configProposal.proposal.nodeConfigsToAdd = { { entity = 70 } }
+reset()
+handle.proposal(1, configProposal, 0)
+check("node configs: an unreadable config gives a line and no error",
+  #logged == 1 and contains(logged[1], "added segment (1 in the proposal)") and contains(logged[1], "node configs: unreadable"), logged[1])
 
 reset()
 comps[1] = nil
