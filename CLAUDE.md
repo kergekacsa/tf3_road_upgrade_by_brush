@@ -14,6 +14,10 @@ Test instructions for the user MUST describe only what to do in the game or the 
 
 ARCHITECTURE.md MUST hold only structure, constraints, and game facts that the code does not show. It MUST NOT hold progress, test results, build letters, dates, who reported what, or what the next test needs. Progress belongs to the tracker and to git history. A document MUST NOT repeat what the code or its docblocks state, such as caps, constants, function lists, or the text of log lines.
 
+## Issue tracker
+
+The issue tracker of this repository is GitHub issues (`gh issue` in the git root). Claude MUST search, file, and update items there, and MUST NOT use the tracker of the editor.
+
 ## Commits
 
 The session folder is the mod folder `kacsa_road_upgrade_brush\`, and the git root is its parent. The commit proposal tool of the editor rejects every path of this repository. Claude MUST show the commit message and the file list in an interactive prompt. Claude MAY then commit with `git` on the command line, but only after an explicit yes to that message and that file list. Claude MUST stage named files only.
