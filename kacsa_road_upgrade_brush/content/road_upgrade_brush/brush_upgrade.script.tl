@@ -203,7 +203,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-11-11 keep"
+local BUILD <const> = "2026-11-11 keys"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -1992,9 +1992,17 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		local mine = not pad or refFocusMode:get() == FOCUS_TOOL
 		return mine and api.gui.inputAction.InputActionState.Enabled or api.gui.inputAction.InputActionState.Disabled
 	end
-	react.useInputAction("IA_UNDERGOUND_MODE_TOGGLE", react.iaHandler(toggleUnderground, toolHasButtons))
-	react.useInputAction(IA_RADIUS_GROW, react.iaHandler(function() stepRadius(1) end, toolHasButtons, _("Brush radius"), true))
-	react.useInputAction(IA_RADIUS_SHRINK, react.iaHandler(function() stepRadius(-1) end, toolHasButtons, _("Brush radius"), true))
+	-- With mouse and keyboard the keys carry no enabled check and no button prompt: the game does not call a key handler
+	-- of this recipe that carries them.
+	local owns : function() : Gui.InputAction.InputActionState = nil
+	local radiusPrompt : string = nil
+	if pad then
+		owns = toolHasButtons
+		radiusPrompt = _("Brush radius")
+	end
+	react.useInputAction("IA_UNDERGOUND_MODE_TOGGLE", react.iaHandler(toggleUnderground, owns))
+	react.useInputAction(IA_RADIUS_GROW, react.iaHandler(function() stepRadius(1) end, owns, radiusPrompt, true))
+	react.useInputAction(IA_RADIUS_SHRINK, react.iaHandler(function() stepRadius(-1) end, owns, radiusPrompt, true))
 	react.useInputAction(IA_ENTER_NAV, react.iaHandler(function() upgradeOnEnter(IA_ENTER_NAV) end))
 	react.useInputAction(IA_ENTER_TEXT, react.iaHandler(function() upgradeOnEnter(IA_ENTER_TEXT) end))
 	if pad then
