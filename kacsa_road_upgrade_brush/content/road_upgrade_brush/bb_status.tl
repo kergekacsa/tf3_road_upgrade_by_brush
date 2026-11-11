@@ -79,7 +79,7 @@ local function reasonLabels() : {string : string}
 		["bus lane or lock could not be set"] = _("bus lane or lock could not be set"),
 		["no valid road type"] = _("no valid road type"),
 		["lanes cannot be kept"] = _("lanes cannot be kept"),
-		["no bus lane plus tram track here"] = _("rub_chip_busTramLanes"),
+		["no bus lane plus tram track here"] = _("no bus lane plus tram track here"),
 		["script error"] = _("script error"),
 		["command limit reached"] = _("command limit reached"),
 		["previous upgrade still running"] = _("previous upgrade still running"),

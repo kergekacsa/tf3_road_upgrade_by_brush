@@ -73,7 +73,7 @@ The mod writes to the game log (`crash_dump\stdout.txt`). Lines start with `[Bru
 The mod folder is `kacsa_road_upgrade_brush/`. This README, `CONTEXT.md` (the terms), `ARCHITECTURE.md` (the code layout and the game facts), `docs/adr/` (the design decisions), `DEVELOPMENT-TOOLS.md` (the Teal and Lua checks), `tests/` (the Lua tests, run with `tests\run.ps1`), and `PUBLISHING.md` (the requirements for a mod.io upload or update) sit next to it, outside the folder that is uploaded.
 
 - `mod.json`: modId `kacsa_road_upgrade_brush`, no dependencies.
-- `_metadata/modinfo.json`: name (25 characters), summary (93 characters), description (HTML, English), tags, and author for mod.io.
+- `_metadata/modinfo.json`: name (25 characters), summary (91 characters), description (HTML, English), tags, and author for mod.io.
 - `_metadata/0.png`: the cover (1920 x 1080): a screenshot of the game with the title card.
 - `_metadata/1.png`: a gallery picture (1920 x 1080): the same screenshot without the card.
 - `_metadata/2.png`: a gallery picture (1920 x 1080): the tool at work on a town, with the toolbar, the selected roads, and the build menu.

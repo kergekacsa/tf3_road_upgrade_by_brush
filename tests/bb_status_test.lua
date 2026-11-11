@@ -32,7 +32,7 @@ do
     updated.head == "3 updated, 0 failed" and updated.detail == "1 unchanged · 1 skipped" and updated.hint == "lanes cannot be kept" and updated.severity == "ok",
     describe(updated))
   local busTram = status.resultLines(result({ requested = 1, skipped = 1, reasons = { ["no bus lane plus tram track here"] = 1 } }))
-  check("result: the bus lane and tram reason shows its short text", busTram.hint == "rub_chip_busTramLanes" and busTram.severity == "warning", describe(busTram))
+  check("result: the bus lane and tram reason shows its short text", busTram.hint == "no bus lane plus tram track here" and busTram.severity == "warning", describe(busTram))
   local noted = status.resultLines(result({ requested = 6, removed = 6, notes = { lostTrees = 2, lostBarrier = 0 } }))
   check("result: the roads that lost their trees are named in the third line", noted.hint == "2 lost their alley trees", describe(noted))
   local several = status.resultLines(result({ requested = 9, removed = 9, notes = { unlisted = 1, country = 3 } }))
