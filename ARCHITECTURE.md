@@ -10,11 +10,12 @@ All paths are under `kacsa_road_upgrade_brush\content\`.
 |---|---|
 | `road_upgrade_brush/brush_upgrade.script.tl`, `.res.lua`, `.css.lua`, `brush_upgrade_rail.res.lua` | The tool: definition, toolbar params, recipe (mouse, brush, highlight, selection, buttons), and the toolbar style. The two `.res.lua` files are the two menu entries (roads, rail) of the same script. |
 | `road_upgrade_brush/bb_brush`, `bb_select`, `bb_gather`, `bb_highlight`, `bb_status`, `bb_types.d.tl` | Brush geometry, selection rules, octree reads, highlight lines, status text, and the global types. |
-| `road_upgrade_brush/bb_upgrade.tl` | The upgrade commit: hard-rule recheck per road, one `replaceSegment` proposal per road, lane and lock edits, pause handling, retry passes, asset-group handling, result counts. |
-| `road_upgrade_brush/brush_options.tl`, `brush_types.d.tl`, `brush_style.tl` | The toolbar options of the brush (the six two-way road types and the add-ons), the street template for the chosen options, setting the options from a copied road, and the style of the red and yellow texts. |
+| `road_upgrade_brush/bb_upgrade.tl` | The upgrade commit: hard-rule recheck per edge, one `replaceSegment` proposal per edge from the plan of that edge, lane and lock edits, pause handling, retry passes, asset-group handling, result counts. It gets the plans through a target function and requires neither `brush_roads.tl` nor `brush_rails.tl`. |
+| `road_upgrade_brush/brush_options.tl`, `brush_types.d.tl`, `brush_style.tl` | The toolbar options of the brush (Keep road type, the six two-way road types, and the add-on states), the target function of the choices for both modes, setting the options from a copied road, and the style of the red and yellow texts. |
 | `road_upgrade_brush/brush_layer.tl` | The state of the world layer of every instance of the tool recipe, its owner, which instance may take it on a mouse event, which instance hands its tool state to the owner, and the test for a stuck ring. |
 | `road_upgrade_brush/brush_clone.tl` | Middle click: finds the street or the track under the pointer and reads its settings. |
 | `road_upgrade_brush/brush_rails.tl` | The six base track templates: name, parse, availability, and the per-track target of an upgrade. |
+| `road_upgrade_brush/brush_roads.tl` | The Roads twin of `brush_rails.tl`: the plan of one road for the toolbar choices (template, decorations, lanes, lock, reason, notes), and the settings of a road for the copy. It requires only `rub_config.tl` and `rub_templates.tl`. `rub_rules.tl` takes the test of the outer driving lanes from it, so that one module defines them. |
 | `road_upgrade_brush/rub_config`, `rub_options`, `rub_rules`, `rub_templates`, `rub_types.d.tl` | Road types, options, rules, and templates from Road Upgrade All in One. |
 | `road_upgrade_brush/proposal_probe.tl` | Diagnostics. The mod option "Debug: upgrade log" (`rub_log` in `mod.json`, Off by default) switches the log lines on. `lotHouses` is the one function that the commit uses with the option On or Off. See "Diagnostic log". |
 | `road_upgrade_brush/pair_spike.tl` | Finds the neighbour of a failed road through a shared node and merges the street data of two `replaceSegment` proposals. The commit uses it in the first retry. It has no dependency on `proposal_probe.tl` or `bb_upgrade.tl`. See "Failures". |
@@ -37,7 +38,7 @@ All paths are under `kacsa_road_upgrade_brush\content\`.
 - `strings.json` MUST hold every text that the code and `mod.json` pass to the translation, in the 12 languages of the game besides English. English uses the text as written in the code. A text with the same English words as a text of the game (`base.mo`) MUST use the game's translation. The exception is a word that is a mistranslation for this use (Off in Italian: the game says Mai, the mod says No).
 - The names of the road types MUST be the names the game gives to its street templates.
 - A text of the status chip MUST fit `status.MAX_CHARS` (36 columns, CJK characters count 2) in every language. The chip shows the short problem texts (`rub_chip_*`). The toolbar notes show the full texts (`rub_problem_*`).
-- Every reason text of the commit MUST have an entry in the label table of `bb_status.tl`.
+- Every reason text of the commit and of a plan (`REASON_*` in `brush_roads.tl`) MUST have an entry in the label table of `bb_status.tl`, and every note of a plan (`NOTE_*`) a text in its note table.
 - A comment in the code MUST state only a contract, an invariant, a unit, or a constraint that holds now. Generated Lua is the same before and after a comment change.
 
 ## Origin of the copied code
@@ -46,7 +47,7 @@ All paths are under `kacsa_road_upgrade_brush\content\`.
 |---|---|
 | Road Upgrade All in One (`road_upgrade_suite`, mod.io 6487083, kurowasiichi) | `rub_config`, `rub_options`, `rub_rules`, `rub_templates`, `rub_types.d.tl`, and the English and Traditional Chinese texts of `strings.json`, with renamed paths, keys, and types |
 | Bulk Bulldozer (`square_bulk_bulldozer`, mod.io 6434884, square17) | `bb_brush`, `bb_select`, `bb_gather`, `bb_highlight`, `bb_status`, `bb_types.d.tl`, `brush_upgrade.css.lua`, `sqperf/*`, and the recipe in `brush_upgrade.script.tl`, with a new module prefix, a cap of 200 (the original has 400), and no removal code. 38 texts of `strings.json` in 12 languages are its translations, and a few more in some languages. |
-| This mod | `bb_upgrade.tl` (the upgrade commit), `brush_options.tl`, `brush_style.tl`, `brush_clone.tl`, `brush_rails.tl`, `brush_layer.tl`, `brush_types.d.tl`, `proposal_probe.tl`, `rub_grid_builder.tl`, the icons, and the image |
+| This mod | `bb_upgrade.tl` (the upgrade commit), `brush_options.tl`, `brush_style.tl`, `brush_clone.tl`, `brush_rails.tl`, `brush_roads.tl`, `brush_layer.tl`, `brush_types.d.tl`, `proposal_probe.tl`, `rub_grid_builder.tl`, the icons, and the image |
 
 - Road Upgrade All in One sends no command. It fills a `streetEdgeNodeModifier` and returns the vanilla action `ACTION_STREET_BUILDER_UPGRADER`. The game builds and sends the command on click. Its `config.tl` lists eight road types (the last two are one-way). Trees and barriers are templates with the suffixes `_trees` and `_barriers`. Country roads have no trees template. `templates.resolve` picks the newest available template for the current year. `rules.check` returns the problems of an option combination.
 - Bulk Bulldozer removes entities with `makeSegmentsRemoveProposal`. The brush copies its selection, highlight, status, and recipe code, not its commit or batch code.
@@ -57,7 +58,7 @@ All paths are under `kacsa_road_upgrade_brush\content\`.
 - `api.engine.util.proposal.replaceSegment(entity, streetTemplate?) : Proposal` refreshes a street or track segment. The type definition says "Use with caution" (`api\tealdef\api\engine\util.d.tl:987-991`). The brush upgrades one segment per road with it and sends the proposal with `api.cmd.makeWorldBuildProposalCmd`.
 - The `StreetEdgeNodeModifier` (`base\tealdef\scripts\builtin.d.tl:157-187`) has `busLane`, `tramTrackType`, `symmetricLanes`, `overrideLaneConfigs`, `overrideEdgeDecorations`, `roadDevelopmentLocked`, and more. No API applies it to a proposal. The vanilla tools only fill it (`gui/construction/construction_react_util.tl:3181-3316`) and the engine applies it on click.
 - `Proposal` is a userdata type with no way to merge two proposals. Its field `proposal : StreetProposal` holds `addedSegments`, `removedSegments`, and node and edge object lists. Each added segment has `comp : BaseEdge` with `roadTemplate`, `laneConfigs`, `edgeDecorations`, and `roadDevelopmentLocked`. The getters may hand out copies, so edits MUST be written back at every level.
-- `replaceSegment` keeps the `edgeDecorations` of the old road, while the street template carries its own in `defaultEdgeDecorations`. The brush writes the decorations of the template.
+- `replaceSegment` keeps the `edgeDecorations` of the old road, while the street template carries its own in `defaultEdgeDecorations`. The brush writes the decoration list of the plan, also an empty one, when the alley trees or the noise barrier of a road change. A plan without a list leaves the decorations to the game.
 - `makeProposalData` rejects the proposal of `replaceSegment` in every form (`bad argument #2 ... SimpleProposal expected, got Proposal`). So the cost is unknown before the command and known from its result.
 - The base game tools change the template, not only the lanes: the bus lane tool gives the `_bus` template (`country_new_medium_bus`, outer lanes without the car), the tram track tool gives the `_tram` template (`town_old_large_tram`), and the upgrade mode with a tram gives `_tram_electrified` (`town_new_small_tram_electrified`). The vanilla proposal for a road with lots has the lot houses in `toRemove` (`moved` or `removed`, one construction each) and the moved ones again in `toAdd`; the game warns "N Buildings Will Be Moved; M Buildings Will Be Removed".
 - A replacement with the template the road already has: the new segment keeps the lock flag, its lanes are rebuilt from the template (a tram track with catenary is gone), and it keeps the old `edgeDecorations`. So a change to the plain template does not remove alley trees by itself. Each replacement gives the road a new entity id.
@@ -84,9 +85,9 @@ All paths are under `kacsa_road_upgrade_brush\content\`.
 - The transport mode numbers are PERSON 0, CARGO 1, CAR 2, BUS 3, TRUCK 4, TRAM 5, ELECTRIC_TRAM 6.
 - The game gives out the modes of a lane as a table with the mode numbers 0 to 15 as keys and booleans as values. It takes them in as a complete list of 16 booleans, one per mode, counted from 1: the mode number plus one is the index. A table with only some indexes gives the lane the modes 0 and 1. A lane written back with the keys it was read with comes out with every mode one number lower.
 - A wrong write gives a vehicle lane the cargo mode, and the game stops in its transport network (`TransportNetworkSystem.cpp IsValidTransition: Assertion 'person0 == person1' failed`). So the brush MUST NOT send a proposal whose lanes do not read back as meant.
-- The lanes of the added segment per option (`<` and `>` are the two directions):
+- The lanes of the added segment of a small road, per add-on that the road carries on its outer driving lanes (`<` and `>` are the two directions):
 
-| Options on | Lanes |
+| Add-on | Lanes |
 |---|---|
 | none | `<0+1 <2+3+4 >2+3+4 >0+1` |
 | Bus lane | `<0+1 <3+4 >3+4 >0+1` (car removed from the outer driving lane) |
@@ -94,6 +95,12 @@ All paths are under `kacsa_road_upgrade_brush\content\`.
 | Tram track and catenary | `<0+1 <2+3+4+5+6 >2+3+4+5+6 >0+1` |
 | Lock | `roadDevelopmentLocked true` on the added segments |
 | Unlock | `roadDevelopmentLocked false` on the added segments |
+
+- In the street templates of the game (`street.zip`), every variant of a road template (`_trees`, `_barriers`, `_bus`, `_tram`, `_tram_electrified`) has the same lanes in the same order as its base. The variants `_bus`, `_tram`, and `_tram_electrified` differ from the base only in the transport modes of the outer driving lanes, in the same way as the table above. So the brush reads a road with such a template as its road type with a bus lane or a tram.
+- The old and the new template of a road type have the same lanes. A small road has one driving lane per direction, a medium road two, and a large road three. In `laneConfigs` the backward lanes come first, from the outer lane to the inner one, then the forward lanes, from the inner lane to the outer one.
+- Not every variant exists: `_bus` exists for the new medium and large roads and the one-way roads, `_tram` for the old town roads, `_tram_electrified` for the town roads, and `_trees` for the town roads. The old templates end in 1940 and the new ones start then. The old templates carry the barrier `barrier_a.edge`, the new ones `barrier_b.edge`.
+- A one-way town road has only forward driving lanes, and its `_bus` and `_tram_electrified` variants change the last lane only. A highway template is a one-way road too: its first and its last lane carry no transport mode at all, and the lanes between them are forward driving lanes.
+- The game accepts `replaceSegment` with a template outside its years: in 1980 it built `country_old_small_barriers` (years up to 1940) with the old barrier on both sides.
 
 ## Failures
 

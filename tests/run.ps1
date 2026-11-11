@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $tl = if ($env:TL) { $env:TL } else { 'C:\Users\Kacsa\tools\teal\tl-0.24.8-windows-x86_64\tl.exe' }
 $build = Join-Path $PSScriptRoot '.build'
-$modules = 'proposal_probe', 'bb_upgrade', 'brush_layer', 'bb_select', 'brush_rails', 'rub_templates', 'rub_grid_builder', 'pair_spike', 'node_crosswalks', 'crosswalk_pass', 'brush_upgrade.script'
+$modules = 'proposal_probe', 'bb_upgrade', 'brush_layer', 'bb_select', 'brush_rails', 'brush_roads', 'rub_config', 'rub_templates', 'rub_options', 'rub_rules', 'brush_options', 'bb_status', 'rub_grid_builder', 'pair_spike', 'node_crosswalks', 'crosswalk_pass', 'brush_upgrade.script'
 
 if (Test-Path $build) { Remove-Item -Recurse -Force $build }
 New-Item -ItemType Directory -Force $build | Out-Null

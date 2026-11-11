@@ -462,6 +462,41 @@ upgrade = dofile(support.buildDir .. "/bb_upgrade.lua")
 
 local DEFAULT_EXTRAS = { busLane = false, tram = false, catenary = false, lock = "keep" }
 
+-- The lanes of a plan that puts the extras on the outer vehicle lanes of a lane layout. nil without bus lane and tram.
+local function planLanes(extras, layout)
+  if not extras.busLane and not extras.tram then return nil end
+  local vehicle = {}
+  for i, modeList in ipairs(layout or {}) do
+    if modeList[1] ~= MODE.PERSON and modeList[1] ~= MODE.CARGO then vehicle[#vehicle + 1] = i end
+  end
+  local lanes = {}
+  for _, i in ipairs({ vehicle[1], vehicle[#vehicle] }) do
+    lanes[i] = { carFree = extras.busLane == true, tram = extras.tram == true, electric = extras.catenary == true }
+  end
+  return lanes
+end
+
+-- The target of a press. With `options.railTarget` (template, same, decorations per track) the plans are those of tracks.
+-- Else every road gets `template` with the extras of the scenario, and a road that has the template is the target already.
+-- It reads the road as the targets of the tool do. `options.target` replaces all of this with the target of the scenario.
+local function targetOf(options, template)
+  if options.target ~= nil then return options.target end
+  if options.railTarget ~= nil then
+    return function(e)
+      local railTemplate, same, decorations = options.railTarget(e)
+      return { template = railTemplate, unchanged = same, decorations = decorations, lock = "keep",
+        reason = railTemplate == nil and "other track type" or nil, notes = {} }
+    end
+  end
+  if template == nil then return nil end
+  local extras = options.extras or DEFAULT_EXTRAS
+  return function(e)
+    local comp = api.engine.getComponent(e, "BASE_EDGE")
+    return { template = template, unchanged = comp.roadTemplate == template, lanes = planLanes(extras, options.proposalLanes),
+      laneCount = #(options.proposalLanes or {}), lock = extras.lock, notes = {} }
+  end
+end
+
 -- Runs one press over `options.edges` and returns the commit result, the lines of the commit, the probe lines, and the
 -- records of the stub.
 local function press(options)
@@ -511,17 +546,16 @@ local function press(options)
   local template = options.template or "new_template"
   if options.noTemplate then template = nil end
   local function commit(onDone)
-    upgrade.commit(options.edges, template, options.extras or DEFAULT_EXTRAS, options.removeBuildings == true, options.ctx or CTX,
-      options.industryRoads or {}, onDone, function(text) lines[#lines + 1] = text end,
-      function(e, ok, finished, total, attempt) roadCalls[#roadCalls + 1] = { e = e, ok = ok, finished = finished, total = total, attempt = attempt } end,
-      options.railTarget)
+    upgrade.commit(options.edges, targetOf(options, template), options.railTarget ~= nil and "track" or "road", options.removeBuildings == true,
+      options.ctx or CTX, options.industryRoads or {}, onDone, function(text) lines[#lines + 1] = text end,
+      function(e, ok, finished, total, attempt) roadCalls[#roadCalls + 1] = { e = e, ok = ok, finished = finished, total = total, attempt = attempt } end)
   end
   commit(function(res) result = res; doneCalls = doneCalls + 1 end)
   -- A second commit while the first one runs
   local second
   if options.secondCommit then
-    upgrade.commit(options.edges, template, options.extras or DEFAULT_EXTRAS, false, options.ctx or CTX, {},
-      function(res) second = res end, function() end, nil, nil)
+    upgrade.commit(options.edges, targetOf(options, template), "road", false, options.ctx or CTX, {},
+      function(res) second = res end, function() end, nil)
   end
   for tick = 1, 400 do
     if result ~= nil then break end
@@ -1373,27 +1407,6 @@ check("tram connections not taken by the proposal: the log says so",
   count(dropped.lines, function(l) return contains(l, "TRAM CONNECTIONS NOT VERIFIED") end) >= 1)
 end
 
--- Whether a road already is what the template and the extras make of it, and which extras a road carries
-world.templateLanes = PLAIN_LANES
-local busMatcher, plainMatcher = upgrade.matcher("old_template", extrasOf({ busLane = true })), upgrade.matcher("old_template", extrasOf({}))
-world.roadLanes = BUS_LANES
-check("matcher: a road with bus lanes is the target of a bus lane upgrade, not of a plain one", busMatcher(1) == true and plainMatcher(1) == false)
-world.roadLanes = PLAIN_LANES
-check("matcher: a plain road is the target of a plain upgrade, not of a bus lane one", plainMatcher(1) == true and busMatcher(1) == false)
-for _, case in ipairs({
-  { "plain", PLAIN_LANES, false, false, false },
-  { "bus lane", BUS_LANES, true, false, false },
-  { "tram track", TRAM_LANES, false, true, false },
-  { "tram track with catenary", CATENARY_LANES, false, true, true },
-}) do
-  world.roadLanes = case[2]
-  local found = upgrade.extrasOf(1, "old_template")
-  check("extras of a road: " .. case[1], found ~= nil and found.busLane == case[3] and found.tram == case[4] and found.catenary == case[5] and found.lock == "keep")
-end
-world.roadLanes = { { MODE.PERSON } }
-check("extras of a road: a road whose lanes fit no combination has none", upgrade.extrasOf(1, "old_template") == nil)
-world.roadLanes, world.templateLanes = nil, nil
-
 -- Rails: the commit builds the target template of each track
 local STANDARD_TRACK = "::/infrastructure/track/standard/standard.street_template"
 local TRACK = { isStreet = false, template = STANDARD_TRACK }
@@ -1524,5 +1537,70 @@ local mixedReads = unlistedComponentReads(mixed, { 1, 2 }, { 50, 60 })
 check("collision with two entities: callbacks read only listed components with getComponent", #mixedReads == 0, text(mixedReads))
 check("the check of listed components sees a read that is not listed",
   #unlistedComponentReads({ callbackReads = { "BASE_EDGE 99", "ASSET_GROUP 7", "GAME_SPEED 5", "BASE_NODE 1" } }, { 1, 2 }, { 50 }) == 4)
+
+-- The plan of each road: reason, notes, decorations and lanes
+do
+  local MEDIUM = {
+    { MODE.PERSON }, { MODE.CAR, MODE.BUS, MODE.TRUCK }, { MODE.CAR, MODE.BUS, MODE.TRUCK }, { MODE.CAR, MODE.BUS, MODE.TRUCK },
+    { MODE.CAR, MODE.BUS, MODE.TRUCK }, { MODE.PERSON },
+  }
+  local MEDIUM_TRAM = {
+    { MODE.PERSON }, { MODE.CAR, MODE.BUS, MODE.TRUCK, MODE.TRAM, MODE.ELECTRIC_TRAM }, { MODE.CAR, MODE.BUS, MODE.TRUCK },
+    { MODE.CAR, MODE.BUS, MODE.TRUCK }, { MODE.CAR, MODE.BUS, MODE.TRUCK, MODE.TRAM, MODE.ELECTRIC_TRAM }, { MODE.PERSON },
+  }
+  local NONE = { carFree = false, tram = false, electric = false }
+  local function planPress(plans, more)
+    local options = { option = 2, edges = { 1, 2 }, proposalLanes = MEDIUM, target = function(e)
+      local plan = {}
+      for key, value in pairs(plans[e]) do plan[key] = value end
+      return plan
+    end }
+    for key, value in pairs(more or {}) do options[key] = value end
+    return press(options)
+  end
+
+  local reasoned = planPress({ [1] = { reason = "lanes cannot be kept", unchanged = false, notes = { "unlisted" } }, [2] = { template = "new_template", unchanged = false, notes = {} } })
+  check("plan with a reason: the road is left alone and counted under its reason, the other road is upgraded",
+    reasoned.result.removed == 1 and #buildsOf(reasoned, 1) == 0 and #buildsOf(reasoned, 2) == 1 and reasoned.result.reasons["lanes cannot be kept"] == 1
+    and #reasoned.result.failed == 0 and reasoned.result.skipped == 1, text(reasoned.commands))
+  check("plan with a reason: the road is reported as done and its notes do not count",
+    count(reasoned.roadCalls, function(c) return c.e == 1 and c.ok == true end) == 1 and next(reasoned.result.notes) == nil)
+  check("plan with a reason: the log names the reason", count(reasoned.lines, function(l) return contains(l, "edge 1: left alone: lanes cannot be kept") end) == 1)
+
+  local noted = planPress({ [1] = { template = "new_template", unchanged = false, notes = { "lostTrees", "country" } }, [2] = { template = "old_template", unchanged = true, notes = { "unlisted" } } })
+  check("notes: the notes of an upgraded road and of an unchanged road are counted",
+    noted.result.removed == 1 and noted.result.unchanged == 1 and noted.result.notes.lostTrees == 1 and noted.result.notes.country == 1 and noted.result.notes.unlisted == 1)
+  local notedFail = planPress({ [1] = { template = "new_template", unchanged = false, notes = { "lostTrees" } }, [2] = { template = "new_template", unchanged = false, notes = {} } },
+    { failCommandFor = { [1] = true } })
+  check("notes: the notes of a road that failed are not counted", #notedFail.result.failed == 1 and next(notedFail.result.notes) == nil)
+  local notedRetry = planPress({ [1] = { template = "new_template", unchanged = false, notes = { "lostTrees" } }, [2] = { template = "new_template", unchanged = false, notes = {} } },
+    { failCommandFor = { [1] = 1 } })
+  check("notes: the notes of a road that the retry upgraded are counted once", notedRetry.result.removed == 2 and notedRetry.result.notes.lostTrees == 1)
+
+  local emptied = planPress({ [1] = { template = "new_template", unchanged = false, decorations = {}, notes = {} }, [2] = { template = "new_template", unchanged = false, notes = {} } })
+  check("decorations: an empty list of the plan is written, a plan without a list writes none",
+    count(emptied.lines, function(l) return contains(l, "edge 1") and contains(l, "decorations 0 -> 0 (wanted 0 per segment)") end) == 1
+    and count(emptied.lines, function(l) return contains(l, "edge 2") and contains(l, "decorations") end) == 0, text(emptied.lines))
+
+  local inner = planPress({ [1] = { template = "new_template", unchanged = false, laneCount = 6, notes = {},
+    lanes = { [2] = { carFree = true, tram = false, electric = false }, [3] = { carFree = false, tram = true, electric = true }, [4] = { carFree = false, tram = true, electric = false }, [5] = NONE } },
+    [2] = { template = "new_template", unchanged = false, laneCount = 6, lanes = { [2] = NONE, [3] = NONE, [4] = NONE, [5] = NONE }, notes = {} } })
+  check("lanes: every lane gets what its flags say, also an inner lane",
+    lanesText(inner.proposalComps[1].laneConfigs) == "0 | 3+4 | 2+3+4+5+6 | 2+3+4+5 | 2+3+4 | 0" and inner.result.removed == 2, lanesText(inner.proposalComps[1].laneConfigs))
+  check("lanes: a road whose lanes need no change is verified without a lane write",
+    lanesText(inner.proposalComps[2].laneConfigs) == layoutText(MEDIUM)
+    and count(inner.lines, function(l) return contains(l, "edge 2") and contains(l, "edit: edit verified") end) == 1, text(inner.lines))
+
+  local stripped = planPress({ [1] = { template = "new_template", unchanged = false, laneCount = 6, notes = {},
+    lanes = { [2] = { carFree = false, tram = true, electric = false }, [3] = NONE, [4] = NONE, [5] = NONE } },
+    [2] = { template = "new_template", unchanged = true, notes = {} } }, { proposalLanes = MEDIUM_TRAM })
+  check("lanes: a tram or a catenary that the template brings is taken off a lane whose flags lack it",
+    lanesText(stripped.proposalComps[1].laneConfigs) == "0 | 2+3+4+5 | 2+3+4 | 2+3+4 | 2+3+4 | 0", lanesText(stripped.proposalComps[1].laneConfigs))
+
+  local miscounted = planPress({ [1] = { template = "new_template", unchanged = false, laneCount = 4, lanes = { [2] = NONE, [3] = NONE }, notes = {} },
+    [2] = { template = "new_template", unchanged = true, notes = {} } })
+  check("lanes: a proposal with another number of lanes than the plan is not sent",
+    #miscounted.builds == 0 and #miscounted.result.failed == 1 and miscounted.result.reasons["bus lane or lock could not be set"] == 1, text(miscounted.commands))
+end
 
 support.finish("commit_flow")

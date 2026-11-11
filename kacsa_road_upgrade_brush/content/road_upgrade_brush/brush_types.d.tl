@@ -1,34 +1,82 @@
 -- Types of the brush tool's own modules.
 
+--- Per track: the template an upgrade gives it, whether it is the target already (template and barrier), and the complete decoration list to set (nil: leave the decorations). The template is nil when it gets none.
+global type RubRailTarget = function(edge : integer) : string, boolean, {{integer, boolean}}
+
+--- What an upgrade does with one driving lane of the new road.
+global record RubLaneFlags
+	carFree : boolean   -- a bus lane: no cars on a lane that carries buses
+	tram : boolean
+	electric : boolean  -- catenary on a tram lane
+end
+
+--- What an upgrade makes of one road or track.
+global record RubPlan
+	template : string                     -- the street template of the new edge; nil with a `reason`
+	unchanged : boolean                   -- the edge already is what the upgrade would make of it
+	reason : string                       -- why the upgrade leaves the whole edge alone (English text of bb_status); nil when it does not
+	decorations : {{integer, boolean}}    -- the complete decoration list to set; nil: the edge keeps its decorations
+	lanes : {integer : RubLaneFlags}      -- per position in the lanes of `template`, for every driving lane; nil: the lanes of the template
+	laneCount : integer                   -- the number of lanes of `template`
+	lock : string                         -- "keep" | "lock" | "unlock"
+	notes : {string}                      -- parts of the choices that this road does not get, and add-ons it loses: the NOTE_ values of RubRoads
+end
+
+--- Per edge: its plan. It reads the edge anew at every call.
+global type RubTarget = function(edge : integer) : RubPlan
+
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_options.tl" as RubBrushOptions
 global record RubBrushOptions
-	--- Toolbar params of the brush: the mode switch (Roads or Rails; Rails when `railEntry`, else Roads, is the default), the two-way road types, bus lane, tram track, catenary, lock, alley trees, noise barriers, the notes about
-	--- impossible combinations (red text in the toolbar group `noteGroup`), and the choice to remove
-	--- buildings in the way (on by default), and for the Rails mode the track type, the catenary state and their notes. Each mode's params are hidden in the other mode.
+	--- Toolbar params of the brush: the mode switch (Roads or Rails; Rails when `railEntry`, else Roads, is the default), the road type list (Keep and the two-way road types),
+	--- the add-on states of bus lane, tram track, catenary, alley trees and noise barrier, the lock, the notes about choices that no road can take (red text in the toolbar group `noteGroup`),
+	--- the choice to remove buildings in the way (on by default), and for the Rails mode the track type, the catenary state and the noise barrier state. Each mode's params are hidden in the other mode.
 	params : function(noteGroup : string, railEntry? : boolean) : {ConstructionMenuParam}
 	--- "road" or "rail": the mode chosen in a toolbar params map.
 	mode : function(params : {string : number}) : string
-	--- The rail choices of a toolbar params map as one text.
-	railKey : function(params : {string : number}) : string
-	--- The per-track target of the rail choices.
-	railTargeter : function(params : {string : number}) : RubRailTarget
+	--- The choices of the active mode in a toolbar params map as one text: two maps with the same text give every edge the same plan.
+	key : function(params : {string : number}) : string
+	--- The per-edge target of the choices of the active mode, or nil and the text of the problem that prevents an upgrade of every road.
+	targeter : function(params : {string : number}) : RubTarget, string
+	--- Whether the Roads choices change no road: Keep road type and every add-on state on Keep.
+	allKeep : function(params : {string : number}) : boolean
 	--- The name the game gives the track type of a clone.
 	trackName : function(clone : RubTrackClone) : string
 	--- Sets the track type and the catenary state of the menu to a track's. The result is false when a param could not be set.
 	applyTrack : function(menu : ConstructionMenuParamsAPI, clone : RubTrackClone) : boolean
-	--- The street template for the options in a toolbar params map, or nil and the text of the
-	--- problem that prevents an upgrade.
-	template : function(params : {string : number}) : string, string
-	--- The bus lane, tram track, catenary and lock chosen in a toolbar params map.
-	extras : function(params : {string : number}) : RubExtras
 	--- Whether the toolbar choice "Remove buildings in the way" is on (also when the map has no value yet).
 	removeBuildings : function(params : {string : number}) : boolean
 	--- Whether the road type of a clone (an index in `config.roadTypes`) is one the toolbar offers (not a one-way type).
 	offers : function(clone : RubClone) : boolean
 	--- The translated name of the road type of a clone.
 	roadTypeName : function(clone : RubClone) : string
-	--- Sets the toolbar params of the menu to the settings of a clone. The result is false when a param could not be set.
+	--- Sets the toolbar params of the menu to the settings of a clone: a concrete road type, and Add or Remove for each add-on (Keep for bus lane, tram track and catenary when `editedLanes`). The result is false when a param could not be set.
 	apply : function(menu : ConstructionMenuParamsAPI, clone : RubClone) : boolean
+end
+
+-- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_roads.tl" as RubRoads
+global record RubRoads
+	--- Reasons of a plan: the road cannot be read, the road type has no template in the year, a lane that carries a bus lane or a tram has no lane to map to, the outer lanes of the template carry no buses.
+	REASON_GONE : string
+	REASON_NO_TEMPLATE : string
+	REASON_LANES : string
+	REASON_BUS_TRAM : string
+	--- Notes of a plan: the trees or barrier change is left out for an unlisted road, alley trees are left out for a country road, the road loses its trees, the road loses its barrier.
+	NOTE_UNLISTED : string
+	NOTE_COUNTRY : string
+	NOTE_LOST_TREES : string
+	NOTE_LOST_BARRIER : string
+	--- The number of road types the toolbar offers: the two-way ones, counted from the first of `config.roadTypes`.
+	offeredTypes : function() : integer
+	--- Whether the outermost driving lane of each direction of the street template carries buses. false when the game has no such template.
+	outerLanesCarryBuses : function(template : string) : boolean
+	--- Whether the choices change no road.
+	isAllKeep : function(choices : RubChoices) : boolean
+	--- The choices as one text.
+	key : function(choices : RubChoices) : string
+	--- The per-road target of the choices in the year. Keep road type leaves the template of a road unless its trees or barrier state changes; then the target is the base of the road with the new suffix, also outside its years. A listed road has a template of one of the offered road types, or its `_bus`, `_tram` or `_tram_electrified` variant; an unlisted road keeps its trees and barrier under Keep road type. A lane keeps what it carries by position, or by rank per direction when the lane layout differs.
+	targeter : function(choices : RubChoices, year : integer) : RubTarget
+	--- The settings of a road. nil when its street template is none of the road types of `config.roadTypes`, or it cannot be read.
+	read : function(edge : integer) : RubClone
 end
 
 --- The settings of one street, as the toolbar shows them.
@@ -40,7 +88,7 @@ global record RubClone
 	tram : boolean
 	catenary : boolean
 	lock : string           -- "lock" or "keep"
-	editedLanes : boolean   -- the lanes match no combination of bus lane and tram track; those three are then off
+	editedLanes : boolean   -- the toolbar cannot state the lanes: an inner lane carries a bus lane or a tram, or the outer lanes differ; those three are then false
 end
 
 --- The settings of one track, as the toolbar shows them.

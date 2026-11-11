@@ -78,6 +78,8 @@ local function reasonLabels() : {string : string}
 		["nothing left to upgrade"] = _("nothing left to upgrade"),
 		["bus lane or lock could not be set"] = _("bus lane or lock could not be set"),
 		["no valid road type"] = _("no valid road type"),
+		["lanes cannot be kept"] = _("lanes cannot be kept"),
+		["no bus lane plus tram track here"] = _("rub_chip_busTramLanes"),
 		["script error"] = _("script error"),
 		["command limit reached"] = _("command limit reached"),
 		["previous upgrade still running"] = _("previous upgrade still running"),
@@ -89,6 +91,27 @@ end
 function status.reasonLabel(reason : string) : string
 	if reason == nil then return "" end
 	return reasonLabels()[reason] or reason
+end
+
+-- The notes of the plans (the NOTE_ values of brush_roads), as a text with the number of roads.
+local function noteFormats() : {string : string}
+	return {
+		lostTrees = _("%d lost their alley trees"),
+		lostBarrier = _("%d lost their noise barrier"),
+		country = _("%d country roads: no alley trees"),
+		unlisted = _("%d other types: no trees/barrier"),
+	}
+end
+
+-- The most frequent note of a result as a text. "" when there is none.
+local function topNote(notes : {string : integer}) : string
+	local formats = noteFormats()
+	local top : string = nil
+	for k, n in pairs(notes or {}) do
+		if n > 0 and formats[k] ~= nil and (top == nil or n > notes[top] or (n == notes[top] and k < top)) then top = k end
+	end
+	if top == nil then return "" end
+	return string.format(formats[top], notes[top])
 end
 
 function status.kindSummary(kindCounts : {string : integer}, objects : integer) : string
@@ -163,7 +186,7 @@ function status.lines(v : RubStatusInput) : RubStatusText
 		local atCap = v.capped or (v.cap ~= nil and n >= v.cap)
 		local head = string.format(atCap and _("%d selected (max)") or _("%d selected"), n)
 		if v.cost ~= nil then head = head .. " · " .. v.cost end
-		return text(head, kinds, atCap and "warning" or nil)
+		return text(head, kinds, atCap and "warning" or nil, v.allKeep and _("All on Keep: nothing will change") or nil)
 	end
 	if v.result ~= nil then
 		return text(v.result.head, v.result.detail, v.result.severity)
@@ -185,8 +208,10 @@ function status.resultLines(r : RubCommitResult) : RubStatusText
 		local left = math.max(0, r.requested - r.removed - unchanged)
 		return text(string.format(_("Cancelled · %d updated"), r.removed), string.format(r.rail and _("%d tracks not done") or _("%d roads not done"), left), "warning")
 	end
+	local notes = topNote(r.notes)
 	if r.removed == 0 and failed == 0 and r.skipped <= 0 and unchanged > 0 then
-		return text(_("Nothing to upgrade"), r.rail and _("The tracks are already like this") or _("The roads are already like this"))
+		return text(_("Nothing to upgrade"), r.rail and _("The tracks are already like this") or _("The roads are already like this"), nil,
+			notes ~= "" and notes or nil)
 	end
 	local head = string.format(_("%d updated, %d failed"), r.removed, failed)
 	local parts : {string} = {}
@@ -206,7 +231,15 @@ function status.resultLines(r : RubCommitResult) : RubStatusText
 	end
 	local severity : string = nil
 	if r.removed > 0 then severity = "ok" elseif failed > 0 then severity = "error" elseif other > 0 then severity = "warning" end
-	local result = text(head, table.concat(parts, " · "), severity)
+	-- The third line: why roads were skipped when no road failed (the reasons of failed roads are in the detail), else the
+	-- most frequent note.
+	local third : string = nil
+	if failed == 0 and other > 0 and #keys > 0 then
+		third = status.reasonLabel(keys[1])
+	elseif notes ~= "" then
+		third = notes
+	end
+	local result = text(head, table.concat(parts, " · "), severity, third)
 	if r.removed > 0 and failed > 0 then
 		result.head = string.format(_("%d updated,"), r.removed)
 		result.tail = string.format(_(" %d failed"), failed)

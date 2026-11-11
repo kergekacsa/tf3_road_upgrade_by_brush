@@ -1,9 +1,7 @@
 -- Reads the settings of the street under the cursor, for the middle click. Read-only: issues no commands.
 
 local brush = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_brush.tl" as RubBrush
-local commit = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_upgrade.tl" as RubCommit
-local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig
-local templates = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_templates.tl" as RubTemplates
+local roads = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_roads.tl" as RubRoads
 local rails = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_rails.tl" as RubRails
 
 local clone : RubBrushClone = {}
@@ -101,38 +99,7 @@ function clone.pick(x : number, y : number, underground : boolean, tracks? : boo
 	return best, note
 end
 
-local function stripSuffix(name : string, suffix : string) : string, boolean
-	if #name > #suffix and string.sub(name, -#suffix) == suffix then
-		return string.sub(name, 1, #name - #suffix), true
-	end
-	return name, false
-end
-
-function clone.read(edge : integer) : RubClone
-	local be = readEdge(edge)
-	if be == nil or be.roadTemplate == nil then return nil end
-	local name, trees = stripSuffix(templates.baseName(be.roadTemplate), config.TreesSuffix)
-	local barrier = false
-	if not trees then name, barrier = stripSuffix(name, config.BarriersSuffix) end
-	for i, roadType in ipairs(config.roadTypes) do
-		for _, base in ipairs(roadType.bases) do
-			if base == name then
-				local extras = commit.extrasOf(edge, be.roadTemplate)
-				return {
-					roadType = i,
-					trees = trees,
-					barrier = barrier,
-					busLane = extras ~= nil and extras.busLane,
-					tram = extras ~= nil and extras.tram,
-					catenary = extras ~= nil and extras.catenary,
-					lock = be.roadDevelopmentLocked and "lock" or "keep",
-					editedLanes = extras == nil,
-				}
-			end
-		end
-	end
-	return nil
-end
+clone.read = roads.read
 
 function clone.readTrack(edge : integer) : RubTrackClone
 	local be = readEdge(edge)

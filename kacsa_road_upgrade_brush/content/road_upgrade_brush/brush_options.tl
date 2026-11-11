@@ -1,12 +1,13 @@
--- Options of the brush tool: the menu params of the rub_options module without the one-way road types.
--- The underground button (key undergroundMode) is the base game's.
+-- Options of the brush tool: the menu params of the rub_options module without the one-way road types, and the
+-- per-edge target of the choices. The underground button (key undergroundMode) is the base game's.
 
-local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig
 local options = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_options.tl" as RubOptions
 local rules = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_rules.tl" as RubRules
 local builtin = ug_require "::/gui/main/builtin.lua" as Builtin
 local brushStyle = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_style.tl" as RubStyle
 local rails = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_rails.tl" as RubRails
+local roads = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_roads.tl" as RubRoads
+local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig
 
 local brushOptions : RubBrushOptions = {}
 
@@ -18,9 +19,9 @@ local TRACK_STATE_KEY <const> = "rub_trackCatenary"
 local TRACK_BARRIER_KEY <const> = "rub_trackBarrier"
 local DEFAULT_TRACK_TYPE <const> = 2
 local RAIL_STATES : {string} = { "keep", "add", "remove" }
+local RAIL_REASON <const> = "other track type"
 local ROAD_TYPE_KEY <const> = "rub_roadType"
 local PROBLEM_KEY_PREFIX <const> = "rub_problem_"
-local ONE_WAY_MARK <const> = "one_way"
 local KEPT_KEYS : {string : boolean} = {
 	rub_busLane = true, rub_tram = true, rub_catenary = true, rub_trees = true, rub_barrier = true, rub_lock = true, undergroundMode = true,
 }
@@ -28,20 +29,6 @@ local REMOVE_BUILDINGS_KEY <const> = "brush_upgrade_remove_buildings"
 local CHECKBOX_NO <const> = 1
 local UNDERGROUND_KEY <const> = "undergroundMode"
 local UNDERGROUND_YES <const> = 1
-
-local function isOneWay(roadType : RubRoadType) : boolean
-	return string.find(roadType.name, ONE_WAY_MARK, 1, true) ~= nil
-end
-
--- config.roadTypes lists the two-way road types before the one-way ones. A combo box index is an index in config.roadTypes.
-local function offeredRoadTypes() : integer
-	local count = 0
-	for _, roadType in ipairs(config.roadTypes) do
-		if isOneWay(roadType) then break end
-		count = count + 1
-	end
-	return count
-end
 
 local function removeBuildingsParam() : ConstructionMenuParam
 	return {
@@ -194,7 +181,8 @@ local function railParams() : {ConstructionMenuParam}
 end
 
 function brushOptions.params(noteGroup : string, railEntry? : boolean) : {ConstructionMenuParam}
-	local offered = offeredRoadTypes()
+	-- The road type combo box lists Keep before the road types.
+	local offered = roads.offeredTypes() + 1
 	local result : {ConstructionMenuParam} = {}
 	for _, param in ipairs(options.params()) do
 		if param.key == ROAD_TYPE_KEY then
@@ -221,26 +209,21 @@ function brushOptions.params(noteGroup : string, railEntry? : boolean) : {Constr
 	return result
 end
 
-function brushOptions.extras(params : {string : number}) : RubExtras
-	local choices = options.fromParams(params or {})
-	return { busLane = choices.busLane, tram = choices.tram, catenary = choices.catenary, lock = choices.lock }
-end
-
 function brushOptions.removeBuildings(params : {string : number}) : boolean
 	return params == nil or params[REMOVE_BUILDINGS_KEY] ~= CHECKBOX_NO
 end
 
 function brushOptions.offers(clone : RubClone) : boolean
-	return clone.roadType <= offeredRoadTypes()
+	return clone.roadType <= roads.offeredTypes()
 end
 
 function brushOptions.roadTypeName(clone : RubClone) : string
 	return _(config.roadTypes[clone.roadType].name)
 end
 
-local CHECKBOX_YES <const> = 2
-local CATENARY_YES <const> = 1
-local CATENARY_NO <const> = 2
+local STATE_KEEP <const> = 1
+local STATE_ADD <const> = 2
+local STATE_REMOVE <const> = 3
 local LOCK_KEEP <const> = 1
 local LOCK_LOCK <const> = 2
 local CATENARY_KEY <const> = "rub_catenary"
@@ -257,8 +240,8 @@ local function setParam(menu : ConstructionMenuParamsAPI, key : string, value : 
 	return set
 end
 
-local function checkBoxValue(on : boolean) : integer
-	return on and CHECKBOX_YES or CHECKBOX_NO
+local function stateValue(on : boolean) : integer
+	return on and STATE_ADD or STATE_REMOVE
 end
 
 local record ParamStep
@@ -266,35 +249,45 @@ local record ParamStep
 	value : integer
 end
 
--- Alley trees and noise barriers go off first and on last: the menu disables each of them while the other is on.
+-- The value in the road type combo box is the index of the road type plus one: Keep is the first entry.
 function brushOptions.apply(menu : ConstructionMenuParamsAPI, clone : RubClone) : boolean
+	local function laneValue(on : boolean) : integer
+		return clone.editedLanes and STATE_KEEP or stateValue(on)
+	end
 	local steps : {ParamStep} = {
-		{ key = "rub_trees", value = CHECKBOX_NO },
-		{ key = "rub_barrier", value = CHECKBOX_NO },
-		{ key = ROAD_TYPE_KEY, value = clone.roadType },
-		{ key = "rub_tram", value = checkBoxValue(clone.tram) },
-		{ key = "rub_busLane", value = checkBoxValue(clone.busLane) },
-		{ key = "rub_trees", value = checkBoxValue(clone.trees) },
-		{ key = "rub_barrier", value = checkBoxValue(clone.barrier) },
+		{ key = ROAD_TYPE_KEY, value = clone.roadType + 1 },
+		{ key = "rub_tram", value = laneValue(clone.tram) },
+		{ key = "rub_busLane", value = laneValue(clone.busLane) },
+		{ key = "rub_trees", value = stateValue(clone.trees) },
+		{ key = "rub_barrier", value = stateValue(clone.barrier) },
 		{ key = "rub_lock", value = clone.lock == "lock" and LOCK_LOCK or LOCK_KEEP },
 	}
 	local allSet = true
 	for _, step in ipairs(steps) do
 		if not setParam(menu, step.key, step.value) then allSet = false end
 	end
-	-- The catenary param exists only from 1910 on, and only while the tram track is on.
-	if clone.tram then setParam(menu, CATENARY_KEY, clone.catenary and CATENARY_YES or CATENARY_NO) end
+	-- The catenary param exists only from 1910 on, and only while the tram track is not on Remove.
+	if clone.editedLanes or clone.tram then setParam(menu, CATENARY_KEY, laneValue(clone.catenary)) end
 	return allSet
 end
 
-function brushOptions.template(params : {string : number}) : string, string
-	local choices = options.fromParams(params or {})
-	if choices.underground then
-		choices.trees = false
-		choices.barrier = false
+local function railTargeter(params : {string : number}) : RubTarget
+	local trackType, state, barrier = trackChoices(params)
+	local target = rails.targeter(trackType, state, api.engine.util.getYear(), barrier)
+	return function(edge : integer) : RubPlan
+		local template, same, decorations = target(edge)
+		return {
+			template = template, unchanged = same, decorations = decorations, lock = "keep",
+			reason = template == nil and RAIL_REASON or nil, notes = {},
+		}
 	end
+end
+
+function brushOptions.targeter(params : {string : number}) : RubTarget, string
+	if isRailMode(params) then return railTargeter(params), nil end
+	local choices = options.fromParams(params or {})
 	-- The menu remembers values by key: a remembered road type can lie outside the offered ones.
-	if choices.roadType > offeredRoadTypes() then
+	if choices.roadType > roads.offeredTypes() then
 		return nil, _("Choose a road type")
 	end
 	local year = api.engine.util.getYear()
@@ -302,18 +295,19 @@ function brushOptions.template(params : {string : number}) : string, string
 	if #problems > 0 then
 		return nil, _("rub_chip_" .. problems[1])
 	end
-	return rules.targetTemplate(choices, year), nil
+	return roads.targeter(choices, year), nil
 end
 
--- The rail choice as one text, for the caches that depend on it.
-function brushOptions.railKey(params : {string : number}) : string
-	local trackType, state, barrier = trackChoices(params)
-	return "rail/" .. trackType .. "/" .. state .. "/" .. barrier
+function brushOptions.key(params : {string : number}) : string
+	if isRailMode(params) then
+		local trackType, state, barrier = trackChoices(params)
+		return "rail/" .. trackType .. "/" .. state .. "/" .. barrier
+	end
+	return roads.key(options.fromParams(params or {})) .. "/" .. tostring(api.engine.util.getYear())
 end
 
-function brushOptions.railTargeter(params : {string : number}) : RubRailTarget
-	local trackType, state, barrier = trackChoices(params)
-	return rails.targeter(trackType, state, api.engine.util.getYear(), barrier)
+function brushOptions.allKeep(params : {string : number}) : boolean
+	return not isRailMode(params) and roads.isAllKeep(options.fromParams(params or {}))
 end
 
 function brushOptions.trackName(clone : RubTrackClone) : string

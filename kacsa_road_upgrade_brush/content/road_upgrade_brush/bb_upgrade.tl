@@ -17,7 +17,7 @@ upgrade.MAX_COMMANDS = sel.STROKE_CAP
 
 local REFUSED_BY_GAME <const> = "refused by the game"
 local STILL_RUNNING <const> = "previous upgrade still running"
-local EXTRAS_NOT_APPLIED <const> = "bus lane or lock could not be set"
+local LANES_NOT_APPLIED <const> = "bus lane or lock could not be set"
 
 -- Pause in seconds after each command: the game still works on the world change of a command when its callback runs.
 local COMMAND_GAP <const> = 0.1
@@ -121,19 +121,6 @@ function upgrade.assertHardRules(edges : {integer}, ctx : RubContext,
 	return passed, dropped
 end
 
--- The edge decorations (alley trees, noise barriers) a template brings when a road is newly built.
--- replaceSegment keeps the decorations of the old road.
-local function templateDecorations(template : string) : {{integer, boolean}}
-	local result : {{integer, boolean}} = {}
-	local templateId = api.res.streetTemplateRep.find(template)
-	if templateId < 0 then return result end
-	for _, entry in ipairs(api.res.streetTemplateRep.get(templateId).defaultEdgeDecorations or {}) do
-		local id = api.res.edgeDecorationRep.find(entry[1])
-		if id >= 0 then result[#result + 1] = { id, entry[2] } end
-	end
-	return result
-end
-
 local function decorationCount(p : Proposal) : integer
 	local n = 0
 	for _, segment in ipairs(p.proposal.addedSegments) do
@@ -153,31 +140,6 @@ local function applyDecorations(p : Proposal, decorations : {{integer, boolean}}
 	end
 	street.addedSegments = segments
 	p.proposal = street
-end
-
--- The first and the last lane that carries vehicles (neither people nor cargo): the outermost driving lane on each side.
-local function outerVehicleLanes(lanes : {LaneConfig}) : {integer}
-	local modes = api.type["enum"].TransportMode
-	local vehicle : {integer} = {}
-	for i, lane in ipairs(lanes or {}) do
-		if not lane.transportModes[modes.PERSON] and not lane.transportModes[modes.CARGO] then
-			vehicle[#vehicle + 1] = i
-		end
-	end
-	if #vehicle <= 1 then return vehicle end
-	return { vehicle[1], vehicle[#vehicle] }
-end
-
-local function anyExtras(extras : RubExtras) : boolean
-	return extras.busLane or extras.tram or extras.lock ~= "keep"
-end
-
-local function extrasText(extras : RubExtras) : string
-	local on : {string} = {}
-	if extras.busLane then on[#on + 1] = "bus lane" end
-	if extras.tram then on[#on + 1] = extras.catenary and "tram with catenary" or "tram" end
-	if extras.lock ~= "keep" then on[#on + 1] = extras.lock end
-	return #on > 0 and table.concat(on, ", ") or "none"
 end
 
 -- The lane's transport modes that are on, as "2+3" (TransportMode numbers).
@@ -221,13 +183,13 @@ local function sameSet(a : {integer : boolean}, b : {integer : boolean}) : boole
 	return true
 end
 
--- The bus lane, tram track and catenary of Road Upgrade All in One, put on the new segments. They differ from the plain
--- proposal in the transport modes of the outer driving lanes (bus lane: no car; tram track: the tram; catenary: the
--- electric tram) and, with the lock, in the lock flag of the segment. The getters may hand out copies: it writes back
--- at every level. The result is false when the lanes read back from the proposal differ from the meant ones, or when a
--- lane that was not edited differs from what it was. Such a proposal MUST NOT be sent: lanes with wrong modes can
--- stop the game in its transport network.
-local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
+-- The bus lane, tram track, catenary and lock of a plan, put on the new segments. A lane that carries buses gets or
+-- loses the car, and every lane of the plan gets or loses the tram and the electric tram. A lane that already has the
+-- meant modes is not written. The getters may hand out copies: it writes back at every level. The result is false when
+-- the lanes read back from the proposal differ from the meant ones, when a lane that was not edited differs from what
+-- it was, or when a segment has another number of lanes than the plan. Such a proposal MUST NOT be sent: lanes with
+-- wrong modes can stop the game in its transport network.
+local function applyLanes(p : Proposal, plan : RubPlan) : boolean, string
 	local modes = api.type["enum"].TransportMode
 	local car = modeNumber(modes.CAR)
 	local bus = modeNumber(modes.BUS)
@@ -236,40 +198,51 @@ local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
 	local street = p.proposal
 	local segments = street.addedSegments
 	local notes : {string} = {}
+	local verified = true
 	-- the lanes meant per segment: segment index -> lane index -> mode numbers
 	local meant : {integer : {integer : {integer : boolean}}} = {}
 	-- the modes of every lane before the edit: segment index -> lane index -> mode numbers
 	local snapshot : {{{integer : boolean}}} = {}
 	for s, segment in ipairs(segments) do
 		local comp = segment.comp
-		if extras.busLane or extras.tram then
+		if plan.lanes ~= nil then
 			meant[s] = {}
 			snapshot[s] = {}
-			for i, lane in ipairs(comp.laneConfigs) do snapshot[s][i] = modeSet(lane) end
 			local lanes = comp.laneConfigs
-			for _, i in ipairs(outerVehicleLanes(lanes)) do
-				local lane = lanes[i]
-				local want = modeSet(lane)
-				local before = modesText(lane)
-				if extras.busLane and want[bus] then want[car] = nil end
-				if extras.tram then want[tram] = true end
-				if extras.catenary then want[electricTram] = true end
-				local written : {boolean} = {}
-				for mode = 0, MODE_COUNT - 1 do written[mode + 1] = want[mode] == true end
-				lane.transportModes = written as any as {TransportMode : boolean}
-				lanes[i] = lane
-				meant[s][i] = want
-				if s == 1 then notes[#notes + 1] = string.format("lane %d %s -> meant %s", i, before, setText(want)) end
+			for i, lane in ipairs(lanes) do snapshot[s][i] = modeSet(lane) end
+			if #lanes ~= plan.laneCount then
+				verified = false
+				notes[#notes + 1] = string.format("segment %d has %d lanes, the template has %d", s, #lanes, plan.laneCount)
+			else
+				local written = false
+				for i = 1, #lanes do
+					local flags = plan.lanes[i]
+					if flags ~= nil then
+						local want = modeSet(lanes[i])
+						if want[bus] then want[car] = (not flags.carFree) or nil end
+						want[tram] = flags.tram or nil
+						want[electricTram] = flags.electric or nil
+						if not sameSet(want, snapshot[s][i]) then
+							local lane = lanes[i]
+							local list : {boolean} = {}
+							for mode = 0, MODE_COUNT - 1 do list[mode + 1] = want[mode] == true end
+							lane.transportModes = list as any as {TransportMode : boolean}
+							lanes[i] = lane
+							meant[s][i] = want
+							written = true
+							if s == 1 then notes[#notes + 1] = string.format("lane %d %s -> meant %s", i, setText(snapshot[s][i]), setText(want)) end
+						end
+					end
+				end
+				if written then comp.laneConfigs = lanes end
 			end
-			comp.laneConfigs = lanes
 		end
-		if extras.lock ~= "keep" then comp.roadDevelopmentLocked = extras.lock == "lock" end
+		if plan.lock ~= "keep" then comp.roadDevelopmentLocked = plan.lock == "lock" end
 		segment.comp = comp
 	end
 	street.addedSegments = segments
 	p.proposal = street
 
-	local verified = true
 	local readBack = p.proposal.addedSegments
 	for s, perLane in pairs(meant) do
 		local lanes = readBack[s].comp.laneConfigs
@@ -287,8 +260,8 @@ local function applyExtras(p : Proposal, extras : RubExtras) : boolean, string
 			end
 		end
 	end
-	if extras.lock ~= "keep" then
-		local locked = extras.lock == "lock"
+	if plan.lock ~= "keep" then
+		local locked = plan.lock == "lock"
 		for s = 1, #readBack do
 			if (readBack[s].comp.roadDevelopmentLocked == true) ~= locked then
 				verified = false
@@ -448,68 +421,26 @@ local function applyTramConnections(p : Proposal) : boolean, string
 	notes[#notes + 1] = verified and "verified" or "TRAM CONNECTIONS NOT VERIFIED, not sent"
 	return verified, "tram connections: " .. table.concat(notes, ", ")
 end
-local ALL_MODE_NAMES : {string} = {
-	"PERSON", "CARGO", "CAR", "BUS", "TRUCK", "TRAM", "ELECTRIC_TRAM", "TRAIN", "ELECTRIC_TRAIN", "AIRCRAFT", "SHIP",
-	"SMALL_AIRCRAFT", "SMALL_SHIP", "HELICOPTER", "TRAM_TRACK", "ELECTRIC_TRAM_TRACK",
-}
 
--- The mode numbers that are on in a lane, read by asking for every mode. Works for the lanes of a road and of a street template.
-local function modeSetOf(lane : LaneConfig) : {integer : boolean}
-	local modes = api.type["enum"].TransportMode as any as {string : any}
-	local have = lane.transportModes as any as {any : boolean}
-	local on : {integer : boolean} = {}
-	for _, name in ipairs(ALL_MODE_NAMES) do
-		local mode = modes[name]
-		if mode ~= nil and have[mode] then on[modeNumber(mode)] = true end
+local function hasTram(lanes : {integer : RubLaneFlags}) : boolean
+	for _, flags in pairs(lanes or {}) do
+		if flags.tram then return true end
 	end
-	return on
+	return false
 end
 
--- The modes the outer driving lanes of a road with the street template and the extras have, per lane index, and the
--- number of lanes. nil when the template is unknown.
-local function templateOuterModes(template : string, extras : RubExtras) : {integer : {integer : boolean}}, integer
-	local id = api.res.streetTemplateRep.find(template)
-	if id < 0 then return nil, 0 end
-	local modes = api.type["enum"].TransportMode
-	local car, bus = modeNumber(modes.CAR), modeNumber(modes.BUS)
-	local tram, electricTram = modeNumber(modes.TRAM), modeNumber(modes.ELECTRIC_TRAM)
-	local lanes = api.res.streetTemplateRep.get(id).laneConfigs
-	local out : {integer : {integer : boolean}} = {}
-	for _, i in ipairs(outerVehicleLanes(lanes)) do
-		local want = modeSetOf(lanes[i])
-		if extras.busLane and want[bus] then want[car] = nil end
-		if extras.tram then want[tram] = true end
-		if extras.catenary then want[electricTram] = true end
-		out[i] = want
-	end
-	return out, #lanes
-end
-
--- Whether a road already is what the template and the extras make of it: the outer driving lanes have exactly the
--- modes meant, and the lock is as it is asked for ("keep" asks for nothing).
-local function carriesExtras(comp : Engine.Component.BaseEdge, template : string, extras : RubExtras) : boolean
-	if extras.lock ~= "keep" and (comp.roadDevelopmentLocked == true) ~= (extras.lock == "lock") then return false end
-	local want, count = templateOuterModes(template, extras)
-	if want == nil then return true end
-	local lanes = comp.laneConfigs or {}
-	if #lanes ~= count then return false end
-	for i, meant in pairs(want) do
-		if not sameSet(modeSetOf(lanes[i]), meant) then return false end
-	end
-	return true
-end
--- The proposal that replaces the road with the template, and one log line about it.
--- `setDecorations`: the list is set even when it is empty (a track whose barrier is removed).
-local function proposalOf(edge : integer, template : string, decorations : {{integer, boolean}}, extras : RubExtras, setDecorations? : boolean) : Proposal, string, string
-	local ok, p = pcall(api.engine.util.proposal.replaceSegment, edge, template)
+-- The proposal that replaces the edge by the plan, and one log line about it.
+local function proposalOf(edge : integer, plan : RubPlan) : Proposal, string, string
+	local ok, p = pcall(api.engine.util.proposal.replaceSegment, edge, plan.template)
 	if not ok or p == nil then return nil, "replaceSegment failed: " .. tostring(p), nil end
 	local summary = ""
-	-- A proposal whose extras are not in place is not sent.
+	local editsLanes = plan.lanes ~= nil or plan.lock ~= "keep"
+	-- A proposal whose lanes or lock are not in place is not sent.
 	local unsafe = false
 	local okS, errS = pcall(function() : string
 		local street = p.proposal
-		summary = string.format("+%d/-%d segments, +%d/-%d nodes, %d edge objects, toRemove %d, toAdd %d",
-			#street.addedSegments, #street.removedSegments, #street.addedNodes, #street.removedNodes,
+		summary = string.format("template %s, +%d/-%d segments, +%d/-%d nodes, %d edge objects, toRemove %d, toAdd %d",
+			tostring(plan.template), #street.addedSegments, #street.removedSegments, #street.addedNodes, #street.removedNodes,
 			#street.edgeObjectsToAdd, #(p.toRemove or {}), #(p.toAdd or {}))
 		pcall(function() : string
 			local old = api.engine.getComponent(edge, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
@@ -518,17 +449,17 @@ local function proposalOf(edge : integer, template : string, decorations : {{int
 			summary = summary .. string.format(", edge objects %d -> %d%s", oldObjects, newObjects, newObjects < oldObjects and " (OBJECTS LOST)" or "")
 			return nil
 		end)
-		if #decorations > 0 or setDecorations then
+		if plan.decorations ~= nil then
 			local before = decorationCount(p)
-			applyDecorations(p, decorations)
+			applyDecorations(p, plan.decorations)
 			summary = summary .. string.format(", decorations %d -> %d (wanted %d per segment)",
-				before, decorationCount(p), #decorations)
+				before, decorationCount(p), #plan.decorations)
 		end
-		if anyExtras(extras) then
-			local okE, note = applyExtras(p, extras)
+		if editsLanes then
+			local okE, note = applyLanes(p, plan)
 			summary = summary .. ", " .. note
 			if not okE then unsafe = true end
-			if okE and extras.tram then
+			if okE and hasTram(plan.lanes) then
 				local okT, tramNote = applyTramConnections(p)
 				summary = summary .. ", " .. tramNote
 				if not okT then unsafe = true end
@@ -538,9 +469,9 @@ local function proposalOf(edge : integer, template : string, decorations : {{int
 	end)
 	if not okS then
 		summary = summary .. ", proposal inspection failed: " .. tostring(errS)
-		unsafe = unsafe or anyExtras(extras)
+		unsafe = unsafe or editsLanes
 	end
-	if unsafe then return nil, summary, EXTRAS_NOT_APPLIED end
+	if unsafe then return nil, summary, LANES_NOT_APPLIED end
 	return p, summary, nil
 end
 
@@ -639,61 +570,6 @@ end
 local function costOf(data : WorldBuildProposalCommandData) : integer
 	local ok, c = pcall(function() : integer return data.resultProposalData.costs end)
 	if ok then return c end
-	return nil
-end
-
-local function normalized(resName : string) : string
-	if resName == nil then return "" end
-	return (string.gsub(resName, "^::/", ""))
-end
-
--- Whether the road already is what the upgrade would make it: the template, and the decorations when
--- the template brings its own.
-local function isAlreadyTarget(edge : integer, template : string, decorations : {{integer, boolean}}, extras : RubExtras) : boolean
-	local ok, same = pcall(function() : boolean
-		local comp = api.engine.getComponent(edge, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
-		if comp == nil or normalized(comp.roadTemplate) ~= normalized(template) then return false end
-		if #decorations == 0 then return carriesExtras(comp, template, extras) end
-		local have = comp.edgeDecorations or {}
-		if #have ~= #decorations then return false end
-		for _, want in ipairs(decorations) do
-			local found = false
-			for _, h in ipairs(have) do
-				if h[1] == want[1] and h[2] == want[2] then found = true; break end
-			end
-			if not found then return false end
-		end
-		return carriesExtras(comp, template, extras)
-	end)
-	return ok and same == true
-end
-
-function upgrade.matcher(template : string, extras : RubExtras) : function(edge : integer) : boolean
-	local decorations = templateDecorations(template)
-	return function(edge : integer) : boolean
-		return isAlreadyTarget(edge, template, decorations, extras)
-	end
-end
-
-local TRAM_STATES : {string} = { "none", "tram", "catenary" }
-
-function upgrade.extrasOf(edge : integer, template : string) : RubExtras
-	local ok, found = pcall(function() : RubExtras
-		local comp = api.engine.getComponent(edge, api.type.ComponentType.BASE_EDGE) as Engine.Component.BaseEdge
-		if comp == nil then return nil end
-		local lock = comp.roadDevelopmentLocked and "lock" or "keep"
-		for _, bus in ipairs({ false, true }) do
-			for _, tramState in ipairs(TRAM_STATES) do
-				local extras : RubExtras = { busLane = bus, tram = tramState ~= "none", catenary = tramState == "catenary", lock = "keep" }
-				if carriesExtras(comp, template, extras) then
-					extras.lock = lock
-					return extras
-				end
-			end
-		end
-		return nil
-	end)
-	if ok then return found end
 	return nil
 end
 
@@ -799,11 +675,11 @@ local record Prepared
 	partner : integer
 end
 
-function upgrade.commit(edges : {integer}, template : string, extras : RubExtras, removeBuildings : boolean, ctx : RubContext,
+function upgrade.commit(edges : {integer}, target : RubTarget, kind : RubKind, removeBuildings : boolean, ctx : RubContext,
 		industryRoads : {integer : boolean}, onDone : function(RubCommitResult), logFn : function(string),
-		onRoad : function(integer, boolean, integer, integer, integer), railTarget? : RubRailTarget)
+		onRoad : function(integer, boolean, integer, integer, integer))
 	local t0 = os.clock()
-	extras = extras or { busLane = false, tram = false, catenary = false, lock = "keep" }
+	local isRail = kind == "track"
 	local plainLog = logFn or function(_s : string) end
 	local function logLine(text : string, category? : string)
 		plainLog(probe.tag(category or "upgrade", text))
@@ -811,7 +687,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	edges = edges or {}
 	local res : RubCommitResult = {
 		requested = #edges, removed = 0, unchanged = 0, failed = {}, skipped = 0, reasons = {}, commands = 0,
-		refused = nil, cost = nil, seconds = 0, rail = railTarget ~= nil, lotFailures = 0, buildingsKept = not removeBuildings,
+		refused = nil, cost = nil, seconds = 0, rail = isRail, lotFailures = 0, buildingsKept = not removeBuildings, notes = {},
 	}
 	if running ~= nil then
 		-- The roads stay selected: a refusal reports them as failed.
@@ -853,6 +729,19 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	local function skip(reason : string, n? : integer)
 		res.reasons[reason] = (res.reasons[reason] or 0) + (n or 1)
 	end
+	-- The notes of the plan each road had last: road -> notes. They count once the road is upgraded or is found unchanged.
+	local planNotes : {integer : {string}} = {}
+	local function addNotes(e : integer)
+		for _, note in ipairs(planNotes[e] or {}) do res.notes[note] = (res.notes[note] or 0) + 1 end
+		planNotes[e] = nil
+	end
+	-- The plan of an edge, read now.
+	local function planOf(e : integer) : RubPlan
+		local plan = target(e)
+		plan.lock = plan.lock or "keep"
+		planNotes[e] = plan.notes
+		return plan
+	end
 	local mine : Running = {}
 	local crosswalks = crosswalkPass.new()
 	local function finish()
@@ -869,9 +758,10 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		end
 		res.skipped = res.requested - res.removed - res.unchanged
 		res.seconds = os.clock() - t0
-		logLine(string.format("upgrade done: %d of %d, %d unchanged, skipped %d%s, %d recovered by the retry, %d commands, cost %s, %.0f ms%s",
+		logLine(string.format("upgrade done: %d of %d, %d unchanged, skipped %d%s%s, %d recovered by the retry, %d commands, cost %s, %.0f ms%s",
 			res.removed, res.requested, res.unchanged, res.skipped,
-			next(res.reasons) ~= nil and (" (" .. reasonsText(res.reasons) .. ")") or "", recovered,
+			next(res.reasons) ~= nil and (" (" .. reasonsText(res.reasons) .. ")") or "",
+			next(res.notes) ~= nil and (", notes (" .. reasonsText(res.notes) .. ")") or "", recovered,
 			res.commands, tostring(res.cost), res.seconds * 1000,
 			res.refused ~= nil and (", refused: " .. res.refused) or ""))
 		if onDone ~= nil then
@@ -906,13 +796,12 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		if n > 0 then logLine(string.format("hard-rule recheck (%s) dropped %d", where, n)) end
 	end
 
-	if template == nil and railTarget == nil then
+	if target == nil then
 		res.refused = "no valid road type"
 		finish()
 		return
 	end
 
-	local kind : RubKind = railTarget ~= nil and "track" or "road"
 	local queue, dropped = upgrade.assertHardRules(edges, ctx, industryRoads, kind)
 	skipDropped(dropped, "before send")
 	if #queue == 0 then
@@ -926,15 +815,13 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 		for i = 1, upgrade.MAX_COMMANDS do limited[i] = queue[i] end
 		queue = limited
 	end
-	local decorations : {{integer, boolean}} = template ~= nil and templateDecorations(template) or {}
-	logLine(string.format("upgrade: %d %s, template %s, extras: %s, %d default decorations, remove buildings %s, %s",
-		#queue, railTarget ~= nil and "tracks" or "roads", template or "per track", extrasText(extras), #decorations,
-		tostring(removeBuildings), simulationText()))
+	logLine(string.format("upgrade: %d %s, remove buildings %s, %s", #queue, isRail and "tracks" or "roads", tostring(removeBuildings),
+		simulationText()))
 
 	-- `probe.press` and `crosswalks:prepare` MUST NOT run in a command callback. They read the roads of the press here, before
 	-- the first command. Tracks have no crosswalks.
 	local press = probe.press(queue)
-	if railTarget == nil then crosswalks:prepare(queue) end
+	if not isRail then crosswalks:prepare(queue) end
 
 	local failed : {integer} = {}
 	local failedReason : {integer : string} = {}
@@ -1002,14 +889,16 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	-- The road and its next neighbour in ONE proposal. Returns the neighbour after it set `prepared`, or nil with `prepared`
 	-- unchanged: the road is then retried alone. An error while the pair is built is logged, drops the other neighbours of the
 	-- road, and has the same result.
-	local function tryPair(e : integer, target : string, wanted : {{integer, boolean}}, setWanted : boolean, prepared : Prepared) : integer
+	local function tryPair(e : integer, plan : RubPlan, prepared : Prepared) : integer
 		local partner = nextPartner(e, true)
 		if partner == nil then return nil end
 		pairTried[pairKey(e, partner)] = true
 		local ok, err = pcall(function() : string
 			if #(upgrade.assertHardRules({ partner }, ctx, industryRoads, kind)) == 0 then error("the neighbour no longer passes the hard rules", 0) end
-			local base, baseSummary = proposalOf(e, target, wanted, extras, setWanted)
-			local other, otherSummary = proposalOf(partner, target, wanted, extras, setWanted)
+			local partnerPlan = planOf(partner)
+			if partnerPlan.reason ~= nil or partnerPlan.template == nil or partnerPlan.unchanged then error("the neighbour has nothing to upgrade", 0) end
+			local base, baseSummary = proposalOf(e, plan)
+			local other, otherSummary = proposalOf(partner, partnerPlan)
 			if base == nil or other == nil then error("no proposal for one of the roads", 0) end
 			local mergeText = pairSpike.merge(base, other)
 			prepared.p = base
@@ -1025,10 +914,10 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 
 	-- Builds the proposal of one road and the context of its command. The game calls this from its own thread: an error in
 	-- the preparation fails the road, not the whole run.
-	local function prepareCommand(e : integer, attempt : integer, target : string, wanted : {{integer, boolean}}, setWanted : boolean) : Prepared
+	local function prepareCommand(e : integer, attempt : integer, plan : RubPlan) : Prepared
 		local prepared : Prepared = { force = false }
 		local okP, errP = pcall(function() : string
-			prepared.p, prepared.summary, prepared.why = proposalOf(e, target, wanted, extras, setWanted)
+			prepared.p, prepared.summary, prepared.why = proposalOf(e, plan)
 			if prepared.p == nil then return nil end
 			prepared.context = makeContext(removeBuildings)
 			local blockers = removeBuildings and attempt > 0 and assetBlockers[e] or nil
@@ -1044,10 +933,10 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 					prepared.force and ", sent with ignoreErrors" or "")
 			end
 			local lotHouseRetry = removeBuildings and attempt == LOT_HOUSE_ATTEMPT and assetBlockers[e] == nil
-			if lotHouseRetry and railTarget == nil then
-				prepared.partner = tryPair(e, target, wanted, setWanted, prepared)
+			if lotHouseRetry and not isRail then
+				prepared.partner = tryPair(e, plan, prepared)
 			end
-			if lotHouseRetry and railTarget == nil and prepared.partner == nil then
+			if lotHouseRetry and not isRail and prepared.partner == nil then
 				local found, houseText = probe.lotHouses(e)
 				if houseText ~= "" then prepared.summary = prepared.summary .. "; " .. houseText end
 				-- An earlier road of this press may have removed a shared house.
@@ -1067,7 +956,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	end
 
 	-- Forward declaration: sendRoad builds and sends the command of one road.
-	local sendRoad : function(integer, integer, string, {{integer, boolean}}, boolean, function())
+	local sendRoad : function(integer, integer, RubPlan, function())
 
 	-- The answer of the game to the command of one road. `done` runs after the command gap. `again` sends the next pair
 	-- command of the road.
@@ -1086,7 +975,9 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			if cost ~= nil then res.cost = (res.cost or 0) + cost end
 			if attempt > 0 then recovered = recovered + 1 end
 			crosswalks:touchRoad(e)
+			addNotes(e)
 			if partner ~= nil then
+				addNotes(partner)
 				res.removed = res.removed + 1
 				pairHandled[partner] = true
 				report(partner, true)
@@ -1135,8 +1026,8 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 	end
 
 	-- The proposal of one road and its command, sent while the game is paused. `done` runs when the road is finished.
-	sendRoad = function(e : integer, attempt : integer, target : string, wanted : {{integer, boolean}}, setWanted : boolean, done : function())
-		local prepared = prepareCommand(e, attempt, target, wanted, setWanted)
+	sendRoad = function(e : integer, attempt : integer, plan : RubPlan, done : function())
+		local prepared = prepareCommand(e, attempt, plan)
 		press.proposal(e, prepared.p, res.commands)
 		if prepared.errText ~= nil then
 			logLine(string.format("edge %d: preparing the command failed: %s", e, prepared.errText), "failure")
@@ -1161,7 +1052,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 				if called or finished then return end
 				called = true
 				busy = false
-				onCommandResult(e, attempt, prepared, data, success, done, function() sendRoad(e, attempt, target, wanted, setWanted, done) end)
+				onCommandResult(e, attempt, prepared, data, success, done, function() sendRoad(e, attempt, plan, done) end)
 			end)
 			return nil
 		end)
@@ -1181,29 +1072,18 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 			done()
 			return
 		end
-		local target = template
-		local same : boolean
-		local wanted = decorations
-		local setWanted = false
-		if railTarget ~= nil then
-			local railDecorations : {{integer, boolean}} = nil
-			target, same, railDecorations = railTarget(e)
-			if railDecorations ~= nil then
-				wanted = railDecorations
-				setWanted = true
-			end
-			if target == nil then
-				skip(REASON_TEXT.track_type)
-				logLine(string.format("edge %d: no target template for this track, left alone", e))
-				report(e, true)
-				done()
-				return
-			end
-		else
-			same = isAlreadyTarget(e, target, decorations, extras)
+		local plan = planOf(e)
+		if #(plan.notes or {}) > 0 then logLine(string.format("edge %d: notes of its plan: %s", e, table.concat(plan.notes, ", "))) end
+		if plan.reason ~= nil or plan.template == nil then
+			skip(plan.reason or REFUSED_BY_GAME)
+			logLine(string.format("edge %d: left alone: %s", e, tostring(plan.reason)))
+			report(e, true)
+			done()
+			return
 		end
-		if same then
+		if plan.unchanged then
 			res.unchanged = res.unchanged + 1
+			addNotes(e)
 			logLine(string.format("edge %d: already the target, left alone", e))
 			report(e, true)
 			done()
@@ -1230,7 +1110,7 @@ function upgrade.commit(edges : {integer}, template : string, extras : RubExtras
 				done()
 				return
 			end
-			sendRoad(e, attempt, target, wanted, setWanted, done)
+			sendRoad(e, attempt, plan, done)
 		end)
 	end
 

@@ -19,20 +19,19 @@ global record RubTemplates
 	baseName : function(resName : string) : string
 	--- Whether the street template exists and is available in the year.
 	isAvailable : function(resName : string, year : integer) : boolean
+	--- The resource name of the street template with the short name ("town_new_large_trees"), in any year. nil when the game has none.
+	find : function(name : string) : string
 end
 
---- Per track: the template an upgrade gives it, whether it is the target already (template and barrier), and the complete decoration list to set (nil: leave the decorations). The template is nil when it gets none.
-global type RubRailTarget = function(edge : integer) : string, boolean, {{integer, boolean}}
-
+--- The Roads choices of the toolbar. An add-on state is "keep", "add" or "remove".
 global record RubChoices
-	roadType : integer
-	busLane : boolean
-	tram : boolean
-	catenary : boolean
-	trees : boolean
-	barrier : boolean
+	roadType : integer  -- an index in `config.roadTypes`; 0 = Keep road type
+	busLane : string
+	tram : string
+	catenary : string   -- "keep" while the toolbar hides the choice
+	trees : string
+	barrier : string
 	lock : string       -- "keep" | "lock" | "unlock"
-	symmetric : boolean
 	underground : boolean
 end
 
@@ -44,7 +43,7 @@ global record RubRules
 		"busTramLanes"
 	end
 
-	targetTemplate : function(choices : RubChoices, year : integer) : string
+	--- The problems of the choices that hold for every road. A problem that depends on the road is a reason of its plan.
 	check : function(choices : RubChoices, year : integer) : {RubRules.Problem}
 end
 

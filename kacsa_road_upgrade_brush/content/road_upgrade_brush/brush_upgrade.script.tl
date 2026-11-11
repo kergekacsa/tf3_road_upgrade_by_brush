@@ -203,7 +203,7 @@ local function diagMsg(msg : string)
 end
 
 -- Changes with every edit of the mod.
-local BUILD <const> = "2026-11-10 tramconn"
+local BUILD <const> = "2026-11-11 keep"
 logMsg("script loaded, build " .. BUILD)
 
 -- Chatty diagnostics (every mouse event, Moved summaries): only with "Debug: performance log" On
@@ -496,15 +496,7 @@ local g_settingsKey : SettingsKey = nil
 -- in place, so the text is made again only for a new map.
 local function settingsKey() : string
 	if g_settingsKey == nil or g_settingsKey.params ~= g_toolParams then
-		local text : string
-		if brushOptions.mode(g_toolParams) == "rail" then
-			text = brushOptions.railKey(g_toolParams)
-		else
-			local x = brushOptions.extras(g_toolParams)
-			text = string.format("%s/%s%s%s%s", tostring((brushOptions.template(g_toolParams))),
-				tostring(x.busLane), tostring(x.tram), tostring(x.catenary), tostring(x.lock))
-		end
-		g_settingsKey = { params = g_toolParams, text = text }
+		g_settingsKey = { params = g_toolParams, text = brushOptions.key(g_toolParams) }
 	end
 	return g_settingsKey.text
 end
@@ -517,20 +509,11 @@ end
 -- The roads of the stroke that already are what the upgrade would make of them. None while the settings are invalid.
 local function findSame(st : RubStroke) : {integer : boolean}
 	local set : {integer : boolean} = {}
+	local target = brushOptions.targeter(g_toolParams)
+	if target == nil then return set end
 	local edges = strokeLists(st)
-	if brushOptions.mode(g_toolParams) == "rail" then
-		local targeter = brushOptions.railTargeter(g_toolParams)
-		for _, e in ipairs(edges) do
-			local _target, hasIt = targeter(e)
-			if hasIt then set[e] = true end
-		end
-		return set
-	end
-	local template = brushOptions.template(g_toolParams)
-	if template == nil then return set end
-	local isSame = commit.matcher(template, brushOptions.extras(g_toolParams))
 	for _, e in ipairs(edges) do
-		if isSame(e) then set[e] = true end
+		if target(e).unchanged then set[e] = true end
 	end
 	return set
 end
@@ -657,10 +640,9 @@ local function previewCost(s : Selection) : integer
 	return s.preview.cost
 end
 
--- What the preview of a waiting selection depends on: the street template, or the rail choices.
+-- What the preview of a waiting selection depends on: the choices of the active mode.
 local function previewTarget() : string
-	if brushOptions.mode(g_toolParams) == "rail" then return brushOptions.railKey(g_toolParams) end
-	return (brushOptions.template(g_toolParams))
+	return brushOptions.key(g_toolParams)
 end
 
 -- makeProposalData summary of the whole stroke.
@@ -1064,7 +1046,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 	end
 	refRenderActive:set(param.isActive == true)
 
-	local function startCommit(s : Selection, template : string, extras : RubExtras, removeBuildings : boolean, railTarget? : RubRailTarget)
+	local function startCommit(s : Selection, target : RubTarget, kind : RubKind, removeBuildings : boolean)
 		local edges = strokeLists(s.stroke)
 		refResult:set(nil)
 		s.phase = PHASE_COMMITTING
@@ -1120,7 +1102,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		end
 		local tPerf = perf:start()
 		local ok, err = pcall(function() : string
-			commit.commit(edges, template, extras, removeBuildings, s.ctx, s.cache.industryRoads, onDone, logMsg, onRoad, railTarget)
+			commit.commit(edges, target, kind, removeBuildings, s.ctx, s.cache.industryRoads, onDone, logMsg, onRoad)
 			return nil
 		end)
 		perf:stop("commit", tPerf)
@@ -1174,21 +1156,16 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			refSkipRelease:set(true)
 			refLmbDown:set(false)
 		end
-		if brushOptions.mode(g_toolParams) == "rail" then
-			local targeter = brushOptions.railTargeter(g_toolParams)
-			upgradeMsg("upgrade", "upgrade button: " .. tostring(sel.count(s.stroke)) .. " selected, " .. brushOptions.railKey(g_toolParams))
-			startCommit(s, nil, brushOptions.extras({}), false, targeter)
-			return
-		end
-		local template, problem = brushOptions.template(g_toolParams)
-		if template == nil then
-			upgradeMsg("failure", "upgrade button: no street template (" .. tostring(problem) .. ")")
+		local target, problem = brushOptions.targeter(g_toolParams)
+		if target == nil then
+			upgradeMsg("failure", "upgrade button: no target (" .. tostring(problem) .. ")")
 			refResult:set({ text = { head = _("Cannot upgrade"), detail = problem, severity = "error" }, untilAt = os.clock() + RESULT_SECONDS })
 			bump()
 			return
 		end
-		upgradeMsg("upgrade", "upgrade button: " .. tostring(sel.count(s.stroke)) .. " selected, template " .. template)
-		startCommit(s, template, brushOptions.extras(g_toolParams), brushOptions.removeBuildings(g_toolParams))
+		local rail = brushOptions.mode(g_toolParams) == "rail"
+		upgradeMsg("upgrade", "upgrade button: " .. tostring(sel.count(s.stroke)) .. " selected, " .. brushOptions.key(g_toolParams))
+		startCommit(s, target, rail and "track" or "road", not rail and brushOptions.removeBuildings(g_toolParams))
 	end
 
 	-- Enter does what the Upgrade button does, for a selection that waits. Only the instance whose world layer is mounted acts.
@@ -1293,6 +1270,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 			progressTotal = s ~= nil and s.progressTotal or 0,
 			retryAttempt = s ~= nil and s.retryAttempt or 0,
 			retryPasses = commit.RETRY_PASSES,
+			allKeep = brushOptions.allKeep(g_toolParams),
 		}
 		if rl ~= nil and rl.sticky and (s == nil or s.phase ~= PHASE_COMMITTING) then return rl.text end
 		return status.lines(v)
@@ -1558,7 +1536,7 @@ local RubAction = react.RegisterRecipe("BrushUpgradeAction",
 		logMsg(string.format("copy: edge %d, road type %d, trees %s, barrier %s, bus lane %s, tram %s, catenary %s, lock %s, edited lanes %s, toolbar %s; %s",
 			edge, c.roadType, tostring(c.trees), tostring(c.barrier), tostring(c.busLane), tostring(c.tram), tostring(c.catenary),
 			c.lock, tostring(c.editedLanes), allSet and "set" or "not fully set", tostring(note)))
-		say(_("Settings copied"), c.editedLanes and _("Lanes edited: bus lane/tram off") or brushOptions.roadTypeName(c), nil)
+		say(_("Settings copied"), c.editedLanes and _("Lanes edited: bus lane/tram on Keep") or brushOptions.roadTypeName(c), nil)
 	end
 
 	-- Middle click in the Rails mode: the track type, the catenary and the noise barrier of the track under the cursor become the settings of the toolbar.

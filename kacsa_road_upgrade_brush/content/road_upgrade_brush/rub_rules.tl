@@ -1,67 +1,40 @@
 -- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083).
--- A combination of options with problems is not applied.
+-- A combination of choices with problems is not applied. These are the problems that hold for every road.
 
 local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig
 local templates = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_templates.tl" as RubTemplates
+local roads = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/brush_roads.tl" as RubRoads
 
 local rules : RubRules = {}
 
-local function decorationSuffix(choices : RubChoices) : string
-	if choices.trees then
-		return config.TreesSuffix
-	end
-	if choices.barrier then
-		return config.BarriersSuffix
-	end
-	return ""
-end
-
-function rules.targetTemplate(choices : RubChoices, year : integer) : string
-	return templates.resolve(config.roadTypes[choices.roadType], decorationSuffix(choices), year)
-end
-
-local function outerLanesCarryBuses(resName : string) : boolean
-	local id = api.res.streetTemplateRep.find(resName)
-	if id < 0 then
-		return false
-	end
-	local modes = api.type["enum"].TransportMode
-	local vehicleLanes : {LaneConfig} = {}
-	for _, lane in ipairs(api.res.streetTemplateRep.get(id).laneConfigs) do
-		if not lane.transportModes[modes.PERSON] and not lane.transportModes[modes.CARGO] then
-			vehicleLanes[#vehicleLanes + 1] = lane
-		end
-	end
-	if #vehicleLanes == 0 then
-		return false
-	end
-	for _, lane in ipairs({ vehicleLanes[1], vehicleLanes[#vehicleLanes] }) do
-		if not lane.transportModes[modes.BUS] then
-			return false
-		end
-	end
-	return true
-end
+local ADD <const> = "add"
 
 function rules.check(choices : RubChoices, year : integer) : {RubRules.Problem}
 	local problems : {RubRules.Problem} = {}
-	if choices.trees and choices.barrier then
+	-- Tunnels have no alley trees and no noise barriers: the two choices do not count while the underground view is on.
+	local trees = not choices.underground and choices.trees == ADD
+	local barrier = not choices.underground and choices.barrier == ADD
+	if trees and barrier then
 		problems[#problems + 1] = "treesAndBarrier"
 	end
 	local roadType = config.roadTypes[choices.roadType]
-	if choices.trees and roadType.country then
+	if roadType == nil then
+		return problems
+	end
+	if trees and roadType.country then
 		problems[#problems + 1] = "treesCountry"
 		return problems
 	end
-	if choices.trees and choices.barrier then
+	if trees and barrier then
 		return problems
 	end
-	local template = rules.targetTemplate(choices, year)
+	local suffix = trees and config.TreesSuffix or (barrier and config.BarriersSuffix or "")
+	local template = templates.resolve(roadType, suffix, year)
 	if template == nil then
 		problems[#problems + 1] = "noTemplate"
 		return problems
 	end
-	if choices.busLane and choices.tram and not outerLanesCarryBuses(template) then
+	if choices.busLane == ADD and choices.tram == ADD and not roads.outerLanesCarryBuses(template) then
 		problems[#problems + 1] = "busTramLanes"
 	end
 	return problems

@@ -1,5 +1,5 @@
 -- Based on 'Road Upgrade All in One' by kurowasiichi (mod.io 6487083).
--- Check boxes and buttons store the 1-based index of the chosen value (check boxes: 1 = no, 2 = yes).
+-- Combo boxes and buttons store the 1-based index of the chosen value.
 
 local config = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_config.tl" as RubConfig
 local rules = ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/rub_rules.tl" as RubRules
@@ -12,62 +12,59 @@ local CatenaryYearFrom <const> = 1910
 
 local Problems <const> : {RubRules.Problem} = { "treesAndBarrier", "treesCountry", "noTemplate", "busTramLanes" }
 
-local DefaultRoadType <const> = "rub_type_town_medium"
+-- The values of an add-on state param, in the order of the combo box.
+local ADDON_STATES <const> : {string} = { "keep", "add", "remove" }
 
--- The values of the lock param, in the order of the combo box. A remembered 1 or 2 from the former check box reads as keep or lock.
+-- The values of the lock param, in the order of the combo box.
 local LOCK_STATES <const> : {string} = { "keep", "lock", "unlock" }
 
-local function defaultRoadTypeIndex() : integer
-	for i, roadType in ipairs(config.roadTypes) do
-		if roadType.name == DefaultRoadType then
-			return i
-		end
-	end
-	return 1
-end
+-- The road type combo box lists Keep before the road types: its value is an index in config.roadTypes plus one.
+local KEEP_ROAD_TYPE <const> = 1
 
-local function isYes(params : {string : number}, key : string) : boolean
-	return params[key] == 2
+local function stateOf(params : {string : number}, key : string) : string
+	return ADDON_STATES[math.floor(params[key] or 1)] or ADDON_STATES[1]
 end
 
 function options.fromParams(params : {string : number}) : RubChoices
-	local roadTypeIndex = math.floor(params["rub_roadType"] or defaultRoadTypeIndex())
-	if config.roadTypes[roadTypeIndex] == nil then
-		roadTypeIndex = defaultRoadTypeIndex()
+	local roadType = math.floor(params["rub_roadType"] or KEEP_ROAD_TYPE) - 1
+	if config.roadTypes[roadType] == nil then
+		roadType = 0
 	end
-	local tram = isYes(params, "rub_tram")
+	local tram = stateOf(params, "rub_tram")
 	return {
-		roadType = roadTypeIndex,
-		busLane = isYes(params, "rub_busLane"),
+		roadType = roadType,
+		busLane = stateOf(params, "rub_busLane"),
 		tram = tram,
-		-- the catenary parameter exists only from CatenaryYearFrom on
-		catenary = tram and params["rub_catenary"] == 1,
-		trees = isYes(params, "rub_trees"),
-		barrier = isYes(params, "rub_barrier"),
+		-- the catenary parameter exists only from CatenaryYearFrom on, and it is hidden while the tram track is removed
+		catenary = tram == "remove" and "keep" or stateOf(params, "rub_catenary"),
+		trees = stateOf(params, "rub_trees"),
+		barrier = stateOf(params, "rub_barrier"),
 		lock = LOCK_STATES[math.floor(params["rub_lock"] or 1)] or LOCK_STATES[1],
-		symmetric = true,
 		underground = params["undergroundMode"] == 1,
 	}
 end
 
-local function checkBox(key : string, checkEnabledFn? : function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult) : ConstructionMenuParam
+local function stateParam(key : string, name? : string) : ConstructionMenuParam
 	return {
 		key = key,
-		name = _(key .. "_name"),
+		name = name or _(key .. "_name"),
 		tooltip = _(key .. "_tooltip"),
-		values = { _("No"), _("Yes") },
+		values = { _("rub_lock_keep"), _("rub_state_add"), _("rub_state_remove") },
 		defaultIndex = 1,
-		uiType = api.type["enum"].ScriptParamType.CheckBox,
+		uiType = api.type["enum"].ScriptParamType.ComboBox,
 		yearFrom = 0,
 		yearTo = 0,
-		checkEnabledFn = checkEnabledFn,
 		resetOnMenuClose = false,
 	}
 end
 
-local function isCountry(params : {string : number}) : boolean
-	local choices = options.fromParams(params)
-	return config.roadTypes[choices.roadType].country
+local function catenaryParam() : ConstructionMenuParam
+	local param = stateParam("rub_catenary", _("Catenary"))
+	param.yearFrom = CatenaryYearFrom
+	param.checkEnabledFn = function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
+		return stateOf(params, "rub_tram") == "remove" and "Hidden" or "Enabled"
+	end
+	return param
 end
 
 local function problemParam(problem : RubRules.Problem) : ConstructionMenuParam
@@ -91,7 +88,7 @@ local function problemParam(problem : RubRules.Problem) : ConstructionMenuParam
 end
 
 function options.params() : {ConstructionMenuParam}
-	local roadTypeNames : {string} = {}
+	local roadTypeNames : {string} = { _("rub_lock_keep") }
 	for __, roadType in ipairs(config.roadTypes) do
 		roadTypeNames[#roadTypeNames + 1] = _(roadType.name)
 	end
@@ -102,38 +99,16 @@ function options.params() : {ConstructionMenuParam}
 			name = _("rub_roadType_name"),
 			tooltip = _("rub_roadType_tooltip"),
 			values = roadTypeNames,
-			defaultIndex = defaultRoadTypeIndex(),
+			defaultIndex = KEEP_ROAD_TYPE,
 			uiType = api.type["enum"].ScriptParamType.ComboBox,
 			yearFrom = 0,
 			yearTo = 0,
 		},
-		checkBox("rub_busLane"),
-		checkBox("rub_tram"),
-		{
-			key = "rub_catenary",
-			name = _("Catenary"),
-			values = { _("Yes"), _("No") },
-			defaultIndex = 1,
-			displayMode = api.type["enum"].ScriptParamDisplayMode.Horizontal,
-			uiType = api.type["enum"].ScriptParamType.Button,
-			yearFrom = CatenaryYearFrom,
-			yearTo = 0,
-			checkEnabledFn = function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
-				return isYes(params, "rub_tram") and "Enabled" or "Hidden"
-			end,
-		},
-		checkBox("rub_trees", function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
-			if isYes(params, "rub_trees") then
-				return "Enabled"
-			end
-			return (isYes(params, "rub_barrier") or isCountry(params)) and "Disabled" or "Enabled"
-		end),
-		checkBox("rub_barrier", function(params : {string : number}) : ConstructionMenuParam.CheckEnabledResult
-			if isYes(params, "rub_barrier") then
-				return "Enabled"
-			end
-			return isYes(params, "rub_trees") and "Disabled" or "Enabled"
-		end),
+		stateParam("rub_busLane"),
+		stateParam("rub_tram"),
+		catenaryParam(),
+		stateParam("rub_trees"),
+		stateParam("rub_barrier"),
 		{
 			key = "rub_lock",
 			name = _("rub_lock_name"),

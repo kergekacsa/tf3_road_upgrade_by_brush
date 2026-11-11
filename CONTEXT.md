@@ -1,6 +1,6 @@
 # Road & Rail Upgrade Brush
 
-A Transport Fever 3 mod with one tool. The player paints over roads or rails to select them, then upgrades all of them to one chosen type in one press.
+A Transport Fever 3 mod with one tool. The player paints over roads or rails to select them, then upgrades all of them in one press: to one chosen type, or with their type kept and only their add-ons changed.
 
 ## Language
 
@@ -16,12 +16,28 @@ _Avoid_: Queue, batch
 The kind of edge the brush selects and upgrades: Roads or Rails. A switch at the top of the toolbar sets it. The toolbar shows only the options of the active mode.
 _Avoid_: Layer, filter (a filter hides kinds the tool never offers; a mode chooses between two offered kinds)
 
+**Add-on state**:
+The three-way choice of what an upgrade does with one add-on of a road: bus lane, tram track, catenary, alley trees or noise barrier. Keep leaves each road as it is, Add puts the add-on on, Remove takes it off. Keep is the default. The lock has its own three ways (Keep, Lock, Unlock).
+_Avoid_: Toggle, check box
+
+**Keep road type**:
+The Roads choice of road type that leaves the road type of each road as it is, so the upgrade changes only add-ons. It is the first entry of the road type list and the default.
+_Avoid_: No change, skip
+
+**Listed road**:
+A road whose template belongs to one of the six road types: the plain template, its variant with alley trees or noise barrier, or the base game variant with a bus lane or a tram track.
+_Avoid_: Supported road, known road
+
+**Unlisted road**:
+A road that is no listed road, such as a one-way road, a highway or a road of another mod. With Keep road type, an upgrade changes only its bus lane, tram track, catenary and lock, never its alley trees or noise barrier.
+_Avoid_: Unknown road, modded road
+
 **Catenary state**:
-The Rails choice of what an upgrade does with the wiring: Keep leaves each track as it is, Add puts catenary on, Remove takes it off.
+The add-on state of the wiring. In Rails mode it puts catenary on a track or takes it off. In Roads mode it acts on every lane that carries a tram track after the upgrade.
 _Avoid_: Electrification
 
 **Noise barrier state**:
-The Rails choice of what an upgrade does with the noise barrier of the game on a track: Keep leaves each track as it is, Add puts the barrier on both sides, Remove takes it off.
+The add-on state of the noise barrier. In Rails mode it sets the barrier of the game on both sides of a track. In Roads mode a road has alley trees or a noise barrier, never both, so Add of one replaces the other.
 _Avoid_: Wall, quiet track (the quiet track is a template of another mod)
 
 **Track type**:
@@ -37,7 +53,7 @@ One of the six two-way street types the Roads mode offers: town or country, each
 _Avoid_: Street type, road class
 
 **Add-on**:
-An option of a road upgrade besides the road type: bus lane, tram track, catenary, alley trees, noise barrier or lock.
+An option of a road upgrade besides the road type: bus lane, tram track, catenary, alley trees, noise barrier or lock. Each has an add-on state, and the lock has its three ways.
 _Avoid_: Extra, modifier
 
 **Lock**:
@@ -54,7 +70,11 @@ _Avoid_: Skipped road, same road
 
 **Failed road**:
 A road whose upgrade command the game refused in every attempt. It stays selected, so another press tries it again.
-_Avoid_: Skipped road (the hard rules drop a skipped road from the selection)
+_Avoid_: Skipped road
+
+**Skipped road**:
+A selected road that the press leaves alone for a reason: a hard rule, or lanes that the new road type cannot keep. It leaves the selection, and the result names the reason.
+_Avoid_: Failed road, dropped road
 
 **Hard rules**:
 The conditions that decide whether the brush may select or change an edge: it skips roads of other players, parts of constructions, industry roads and stand-alone tram tracks, and in Rails mode tracks with another template.
@@ -69,7 +89,7 @@ The colours on the map before the press. Edges under the circle that are not sel
 _Avoid_: Hover, highlight
 
 **Copy**:
-The middle click that reads the settings of the road or track under the pointer into the toolbar. It selects nothing.
+The middle click that reads the settings of the road or track under the pointer into the toolbar: a concrete type, and Add or Remove for each add-on. It selects nothing.
 _Avoid_: Pick, clone, eyedropper
 
 **Underground button**:

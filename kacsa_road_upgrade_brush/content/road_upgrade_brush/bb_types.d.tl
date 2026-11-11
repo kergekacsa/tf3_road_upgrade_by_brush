@@ -275,14 +275,7 @@ global record RubCommitResult
 	rail : boolean                  -- the edges were tracks
 	lotFailures : integer           -- failed roads whose game messages name an unexpected parcel (a building lot)
 	buildingsKept : boolean         -- "Remove buildings in the way" was off
-end
-
---- The add-ons of Road Upgrade All in One that change the lanes or the lock of the new segments.
-global record RubExtras
-	busLane : boolean
-	tram : boolean
-	catenary : boolean
-	lock : string   -- "keep": the segments keep their lock; "lock"; "unlock"
+	notes : {string : integer}      -- note of a plan (a NOTE_ value of RubRoads) → roads that were upgraded or unchanged with it
 end
 
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_upgrade.tl" as RubCommit
@@ -302,12 +295,6 @@ global record RubCommit
 	abort : function()
 	--- One log line about a road: kind, template, edge objects, decorations, parcels.
 	describeRoad : function(edge : integer) : string
-	--- The test the commit uses to leave a road alone: whether a road already is what the upgrade to `template` with
-	--- `extras` would make of it (road type, trees, barriers, bus lane, tram track, catenary, lock).
-	matcher : function(template : string, extras : RubExtras) : function(edge : integer) : boolean
-	--- The bus lane, tram track and catenary that a road with the street template carries (lock: "lock" when the road is
-	--- locked, else "keep"). nil when the lanes of the road match none of the combinations, or the road cannot be read.
-	extrasOf : function(edge : integer, template : string) : RubExtras
 	--- The cost is unknown before the upgrade: makeProposalData rejects the proposal replaceSegment returns.
 	preview : function(edges : {integer}, template : string) : RubPreview
 	--- Re-checks the hard rules on fresh descriptors right before sending. Returns the roads that
@@ -315,25 +302,25 @@ global record RubCommit
 	--- industry-road protection over (bb_gather cache).
 	assertHardRules : function(edges : {integer}, ctx : RubContext,
 		industryRoads : {integer : boolean}, kind? : RubKind) : {integer}, {integer : string}
-	--- Upgrades the roads to the street template with one command per road, one after the other. A road
-	--- that already is the target is left alone; a road whose command fails is tried again, twice, after the
-	--- others.
-	--- `extras` are the bus lane, tram track, catenary and lock of Road Upgrade All in One; a road that already has them (and the template) is left alone.
-	--- With the tram track, the node configs of each proposal get the tram connections between the new road and the other streets of its end nodes; a street with several tram lanes per direction is left out.
+	--- Upgrades the edges with one command per edge, one after the other. `target` gives the plan of each edge, read
+	--- right before its command: an edge with a `reason` is left alone and counted under that reason, an edge that
+	--- already is the target (`unchanged`) is left alone, and any other edge is replaced by the template of its plan with its
+	--- decorations, lanes and lock. An edge whose command fails is tried again, twice, after the others. The notes of a
+	--- plan are counted in the result once the edge is upgraded or is found unchanged.
+	--- With a tram on a lane of the plan, the node configs of the proposal get the tram connections between the new road and the other streets of its end nodes; a street with several tram lanes per direction is left out.
+	--- `kind` is "road" or "track": the hard rules keep only edges of that kind. Only a press of roads demolishes lot houses, forms pairs, and runs the crosswalk pass.
 	--- `onRoad` runs each time a road is done in the current pass: ok when it was upgraded, was already the target, or was
-	--- dropped by the hard rules; not ok when its command failed. It gets the road, ok, the number of roads done in this
+	--- dropped by the hard rules or its plan; not ok when its command failed. It gets the road, ok, the number of roads done in this
 	--- pass, the number of roads in this pass, and the pass (0 = first, 1 and 2 = retries). At the start of a retry pass it
 	--- runs once with no road (edge nil) and 0 done.
-	--- With `railTarget` the edges are tracks: `template` is nil, and `railTarget` gives per track the template it gets and whether it has that template already (nil when the track gets none; it is then left alone). The hard rules then keep tracks, not roads.
 	--- With `removeBuildings` the commands also demolish the buildings that block a road; without it such a road is
 	--- skipped. Only one commit runs at a time: while one runs, a new commit sends nothing and onDone runs at once with
-	--- `refused` set and every road in `failed`. onDone runs once, possibly from a sendCommand callback. In the result, `removed` counts the upgraded
+	--- `refused` set and every road in `failed`. Without a `target` nothing is sent and `refused` is set. onDone runs once, possibly from a sendCommand callback. In the result, `removed` counts the upgraded
 	--- roads and `cost` is what the game charged for them (nil when it reports none).
-	commit : function(edges : {integer}, template : string, extras : RubExtras, removeBuildings : boolean, ctx : RubContext,
+	commit : function(edges : {integer}, target : RubTarget, kind : RubKind, removeBuildings : boolean, ctx : RubContext,
 		industryRoads : {integer : boolean},
 		onDone : function(RubCommitResult), logFn : function(string),
-		onRoad : function(edge : integer, ok : boolean, finished : integer, total : integer, attempt : integer),
-		railTarget? : RubRailTarget)
+		onRoad : function(edge : integer, ok : boolean, finished : integer, total : integer, attempt : integer))
 	--- How many times the roads that failed are tried again.
 	RETRY_PASSES : integer
 end
@@ -362,6 +349,7 @@ global record RubStatusInput
 	progressTotal : integer          -- roads in the current pass
 	retryAttempt : integer          -- 0 in the first pass, 1 and 2 in the retry passes, -1 while the crosswalk pass runs (then the progress counts junctions)
 	retryPasses : integer           -- how many retry passes there are
+	allKeep : boolean               -- the Roads choices change no road (Keep road type, every add-on state on Keep)
 end
 
 -- Module: ug_require "kacsa_road_upgrade_brush::/road_upgrade_brush/bb_status.tl" as RubStatus
